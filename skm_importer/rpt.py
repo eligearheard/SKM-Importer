@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .models import ReportSectionSummary, ReportSummary
+from .rpt_schema import default_template
 
 
 SECTION_PATTERN = re.compile(r"^\s*//\s*---\s*(.+?)\s*---\s*$")
@@ -12,7 +13,7 @@ FIELD_PATTERN = re.compile(r"<([^<>]+)>")
 def inspect_report(path: str | Path) -> ReportSummary:
     report_path = Path(path)
     if report_path.suffix.lower() != ".rpt":
-        raise ValueError("Choose an SKM .rpt export as the report-format reference.")
+        raise ValueError("Choose an SKM .rpt report.")
     if not report_path.is_file():
         raise FileNotFoundError(f"SKM report not found: {report_path}")
     text = report_path.read_text(encoding="utf-8-sig", errors="replace")
@@ -88,7 +89,7 @@ def parse_report(text: str) -> tuple[tuple[ReportSectionSummary, ...], tuple[str
 
     finish_section()
     if not sections:
-        errors.append("No SKM component sections were found in the selected .rpt file.")
+        errors.append("No SKM component sections were found in the RPT file.")
     return tuple(sections), tuple(errors)
 
 
@@ -178,3 +179,14 @@ def write_report(
     text = template.read_text(encoding="utf-8-sig", errors="replace")
     rendered = render_report(text, records_by_section)
     Path(output_path).write_text(rendered, encoding="utf-8", newline="")
+
+
+def write_default_report(
+    output_path: str | Path,
+    records_by_section: Mapping[str, Sequence[Sequence[object]]],
+) -> None:
+    output = Path(output_path)
+    if output.suffix.lower() != ".rpt":
+        raise ValueError("The SKM output path must use the .rpt extension.")
+    rendered = render_report(default_template(), records_by_section)
+    output.write_text(rendered, encoding="utf-8", newline="")

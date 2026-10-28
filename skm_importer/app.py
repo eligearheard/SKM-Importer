@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 from tkinter import filedialog, messagebox, ttk
 
-from .pipeline import inspect_inputs
+from .pipeline import generate_import_report
 from .preferences import load_update_interval, save_update_interval
 from .updater import UpdateInfo, check_for_update, download_update, install_update
 from .version import __version__
@@ -22,7 +22,7 @@ class ImporterApp:
         self.root.configure(bg="#f1f3f2")
 
         self.workbook_path = tk.StringVar()
-        self.report_path = tk.StringVar()
+        self.output_path = tk.StringVar()
         self.status = tk.StringVar(value="Ready")
         self.update_interval_minutes = load_update_interval()
         self.update_interval = tk.StringVar(value=str(self.update_interval_minutes))
@@ -53,16 +53,16 @@ class ImporterApp:
         page = ttk.Frame(self.root, padding=(28, 22))
         page.pack(fill="both", expand=True)
         ttk.Label(page, text="SKM Importer", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(page, text=f"Workbook and SKM report inspection · Version {__version__}", style="Muted.TLabel").pack(anchor="w", pady=(2, 18))
+        ttk.Label(page, text=f"Workbook to SKM report · Version {__version__}", style="Muted.TLabel").pack(anchor="w", pady=(2, 18))
 
         inputs = ttk.Frame(page, style="Panel.TFrame", padding=18)
         inputs.pack(fill="x")
         self._file_row(inputs, 0, "Spreadsheet", self.workbook_path, self._choose_workbook)
-        self._file_row(inputs, 1, "SKM reference report", self.report_path, self._choose_report)
+        self._file_row(inputs, 1, "Output SKM report", self.output_path, self._choose_output)
 
         actions = ttk.Frame(page)
         actions.pack(fill="x", pady=(14, 12))
-        self.analyze_button = ttk.Button(actions, text="Inspect files", style="Accent.TButton", command=self._start_inspection)
+        self.analyze_button = ttk.Button(actions, text="Generate SKM report", style="Accent.TButton", command=self._start_generation)
         self.analyze_button.pack(side="left")
         self.update_button = ttk.Button(actions, text="Check for updates", command=self._start_update_check)
         self.update_button.pack(side="right")
@@ -107,7 +107,7 @@ class ImporterApp:
 
         footer = ttk.Label(
             page,
-            text="No report is generated during inspection. Export mappings are the next step after source fields are verified.",
+            text="Only values present in the workbook are exported. Missing or unsupported data appears as a validation warning.",
             style="Muted.TLabel",
             wraplength=860,
         )
@@ -158,24 +158,25 @@ class ImporterApp:
     def _choose_workbook(self) -> None:
         path = filedialog.askopenfilename(
             title="Select spreadsheet",
-            filetypes=[("Excel workbooks", "*.xlsx *.xlsm *.xls"), ("All files", "*.*")],
+            filetypes=[("Excel workbooks", "*.xlsx *.xlsm"), ("All files", "*.*")],
         )
         if path:
             self.workbook_path.set(path)
 
-    def _choose_report(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select an SKM reference report",
+    def _choose_output(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save SKM import report",
+            defaultextension=".rpt",
             filetypes=[("SKM reports", "*.rpt"), ("All files", "*.*")],
         )
         if path:
-            self.report_path.set(path)
+            self.output_path.set(path)
 
-    def _start_inspection(self) -> None:
+    def _start_generation(self) -> None:
         workbook_path = self.workbook_path.get().strip()
-        report_path = self.report_path.get().strip()
-        if not workbook_path or not report_path:
-            messagebox.showwarning("Select input files", "Choose a spreadsheet and an SKM reference report first.")
+        output_path = self.output_path.get().strip()
+        if not workbook_path or not output_path:
+            messagebox.showwarning("Select files", "Choose a spreadsheet and an output SKM report path first.")
             return
 
         self._clear_results()
@@ -183,17 +184,17 @@ class ImporterApp:
         self.status.set("Inspecting...")
         self.analyze_button.configure(state="disabled")
         worker = threading.Thread(
-            target=self._inspect_worker,
-            args=(workbook_path, report_path),
+            target=self._generate_worker,
+            args=(workbook_path, output_path),
             daemon=True,
         )
         worker.start()
 
-    def _inspect_worker(self, workbook_path: str, report_path: str) -> None:
+    def _generate_worker(self, workbook_path: str, output_path: str) -> None:
         try:
-            workbook, report = inspect_inputs(
+            workbook, report = generate_import_report(
                 workbook_path,
-                report_path,
+                output_path,
                 progress=lambda percent, message: self.events.put(("progress", (percent, message))),
             )
             self.events.put(("result", (workbook, report)))

@@ -1,6 +1,6 @@
 # SKM Importer
 
-Desktop application for inspecting Excel workbooks and SKM Power*Tools `.rpt` exports before generating an import report.
+Desktop application for converting field-survey Excel workbooks into SKM Power*Tools `.rpt` import reports.
 
 ## Easiest: Download the app
 
@@ -25,7 +25,7 @@ git push origin v0.1.0
 
 Run `setup.bat` once, then `run.bat`. This creates a local virtual environment and installs the dependencies.
 
-The app currently inspects `.xls`, `.xlsx`, and `.xlsm` workbooks and an SKM `.rpt` reference export. It reports workbook sheets, formulas, Excel formula errors, SKM sections, field counts, and malformed records with visible progress. It does not generate a project `.rpt` yet; workbook-to-SKM field mappings must be verified before producing engineering data.
+The app reads `.xlsx` and `.xlsm` field-survey workbooks and generates an SKM `.rpt` using its built-in section and field schema; no reference report is needed. It currently maps feeder/cable, bus, bus duct, utility, and two-winding transformer data. Values not present in the workbook are left blank, and skipped or incomplete records are reported as validation warnings. Review the generated report and warnings before importing it into SKM.
 
 ## Run tests
 

@@ -1,6 +1,9 @@
 import unittest
+import tempfile
+from pathlib import Path
 
-from skm_importer.rpt import parse_report, render_report
+from skm_importer.rpt import parse_report, render_report, write_default_report
+from skm_importer.rpt_schema import SECTION_FIELDS
 
 
 class ReportParsingTests(unittest.TestCase):
@@ -71,6 +74,23 @@ class ReportParsingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "not present in the RPT template"):
             render_report(template, {"Not a section": []})
+
+    def test_writes_report_using_builtin_skm_schema(self) -> None:
+        bus_record = [""] * len(SECTION_FIELDS["Bus"])
+        bus_record[0] = "MAIN"
+        bus_record[1] = "10"
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "generated.rpt"
+            write_default_report(path, {"Bus": [bus_record]})
+            text = path.read_text(encoding="utf-8")
+
+        sections, errors = parse_report(text)
+
+        self.assertEqual(errors, ())
+        self.assertEqual([section.name for section in sections], list(SECTION_FIELDS))
+        self.assertEqual(sections[0].fields, tuple(SECTION_FIELDS["Bus"]))
+        self.assertEqual(sections[0].record_count, 1)
 
 
 if __name__ == "__main__":
