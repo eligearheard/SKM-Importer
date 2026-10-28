@@ -10,6 +10,7 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 
 
@@ -36,8 +37,16 @@ def check_for_update(current_version: str) -> UpdateInfo | None:
         LATEST_RELEASE_URL,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "SKM-Importer"},
     )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        release = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            release = json.load(response)
+    except HTTPError as error:
+        if error.code == 404:
+            raise RuntimeError(
+                "No publicly accessible GitHub release is available for SKM Importer. "
+                "Publish a release or make the repository's releases publicly accessible."
+            ) from error
+        raise
 
     tag = release.get("tag_name", "")
     latest_key = _version_key(tag)

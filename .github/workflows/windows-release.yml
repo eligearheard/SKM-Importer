@@ -1,0 +1,55 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example v0.1.0
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Stamp app version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $version = $env:INPUT_VERSION
+          if (-not $version) { $version = $env:TAG_NAME }
+          if ($version -notmatch '^v?\d+\.\d+\.\d+$') { throw "Invalid release version: $version" }
+          $normalized = $version -replace '^v', ''
+          Set-Content -Path skm_importer/version.py -Value "__version__ = `"$normalized`"" -Encoding ascii
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name SKM-Importer --collect-all openpyxl --collect-all xlrd main.py
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:RELEASE_VERSION" "dist/SKM-Importer.exe" --title "SKM Importer $env:RELEASE_VERSION" --generate-notes

@@ -3,20 +3,23 @@ import io
 import json
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from pathlib import Path
 from unittest.mock import patch
 
-from skm_importer.updater import UpdateInfo, check_for_update, download_update
+from skm_importer.updater import LATEST_RELEASE_URL, UpdateInfo, check_for_update, download_update
 
 
 class UpdateCheckTests(unittest.TestCase):
-    def release_response(self, tag: str) -> io.BytesIO:
+    def release_response(self, tag: str, download_url: str | None = None) -> io.BytesIO:
         release = {
             "tag_name": tag,
             "assets": [
                 {
                     "name": "SKM-Importer.exe",
-                    "browser_download_url": "https://example.test/SKM-Importer.exe",
+                    "browser_download_url": download_url or (
+                        f"https://github.com/eligearheard/SKM-Importer/releases/download/{tag}/SKM-Importer.exe"
+                    ),
                 }
             ],
         }
@@ -26,7 +29,28 @@ class UpdateCheckTests(unittest.TestCase):
         with patch("skm_importer.updater.urllib.request.urlopen", return_value=self.release_response("v0.2.0")):
             update = check_for_update("0.1.0")
 
-        self.assertEqual(update, UpdateInfo("0.2.0", "https://example.test/SKM-Importer.exe", None))
+        self.assertEqual(
+            update,
+            UpdateInfo(
+                "0.2.0",
+                "https://github.com/eligearheard/SKM-Importer/releases/download/v0.2.0/SKM-Importer.exe",
+                None,
+            ),
+        )
+
+    def test_reports_when_no_public_release_exists(self) -> None:
+        error = HTTPError(LATEST_RELEASE_URL, 404, "Not Found", None, None)
+        with patch("skm_importer.updater.urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "No publicly accessible GitHub release"):
+                check_for_update("0.1.0")
+
+    def test_rejects_asset_url_outside_github(self) -> None:
+        with patch(
+            "skm_importer.updater.urllib.request.urlopen",
+            return_value=self.release_response("v0.2.0", "https://example.test/SKM-Importer.exe"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected download URL"):
+                check_for_update("0.1.0")
 
     def test_returns_none_for_current_release(self) -> None:
         with patch("skm_importer.updater.urllib.request.urlopen", return_value=self.release_response("v0.1.0")):
