@@ -11,10 +11,17 @@ if not defined PYTHON_CMD (
     if not errorlevel 1 set "PYTHON_CMD=python"
 )
 
-if not defined PYTHON_CMD if exist "%LOCALAPPDATA%\Python\pythoncore-3.13-64\python.exe" set "PYTHON_CMD=%LOCALAPPDATA%\Python\pythoncore-3.13-64\python.exe"
+if not defined PYTHON_CMD if exist "%LOCALAPPDATA%\Python\pythoncore-3.13-64\python.exe" set PYTHON_CMD="%LOCALAPPDATA%\Python\pythoncore-3.13-64\python.exe"
 
 if not defined PYTHON_CMD (
     echo Python 3.11 or newer is required. Install Python and run setup.bat again.
+    pause
+    exit /b 1
+)
+
+%PYTHON_CMD% -c "import sys; sys.exit(sys.version_info < (3, 11))"
+if errorlevel 1 (
+    echo Python 3.11 or newer is required. Install a supported version and try again.
     pause
     exit /b 1
 )
