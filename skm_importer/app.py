@@ -1,4 +1,5 @@
 import queue
+from typing import Callable
 import threading
 import tkinter as tk
 from pathlib import Path
