@@ -10,6 +10,8 @@ Windows may display a SmartScreen warning because the app is not code-signed.
 
 The app checks for updates when it opens and every 5 minutes by default. Change the **Auto-check every** value and select **Save** to use a different interval (1 to 1,440 minutes); the setting persists across launches. You can also use **Check for updates** at any time. When an update is available, choose **Yes** to download and install it; the app closes briefly and reopens with the new version. Users with an already-downloaded older executable must download this update-enabled release once; later releases can be installed from within the app.
 
+Updater diagnostics are written to `%LOCALAPPDATA%\SKM Importer\update.log`; the previous log is retained as `update.previous.log` when the current log exceeds 1 MB.
+
 ## Build a Windows download
 
 For maintainers, the easiest way to publish a download is from GitHub: open **Actions → Windows release → Run workflow**, enter a version such as `v0.1.0`, and start the workflow. GitHub stamps that version into the Windows app, builds it, and publishes the release; no local Python setup is needed.

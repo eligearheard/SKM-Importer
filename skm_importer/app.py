@@ -1,4 +1,5 @@
 import queue
+import os
 import sys
 import threading
 import tkinter as tk
@@ -242,7 +243,7 @@ class ImporterApp:
     def _download_update_worker(self, update: UpdateInfo) -> None:
         try:
             downloaded = download_update(update)
-            self.events.put(("update_downloaded", downloaded))
+            self.events.put(("update_downloaded", (downloaded, update.version)))
         except Exception as error:
             self.events.put(("update_error", (str(error), False)))
 
@@ -272,8 +273,9 @@ class ImporterApp:
                         self.status.set("You're up to date")
                         messagebox.showinfo("No updates available", "You're running the latest version of SKM Importer.")
                 elif event == "update_downloaded":
+                    downloaded_path, version = payload
                     try:
-                        install_update(payload)
+                        install_update(downloaded_path, version)
                     except Exception as error:
                         self.status.set("Update could not be installed")
                         messagebox.showerror("Could not install update", str(error))
@@ -312,4 +314,7 @@ class ImporterApp:
 def main() -> None:
     root = tk.Tk()
     ImporterApp(root)
+    ready_path = os.environ.pop("SKM_IMPORTER_UPDATE_READY_FILE", "")
+    if ready_path:
+        Path(ready_path).write_text("ready\n", encoding="ascii")
     root.mainloop()

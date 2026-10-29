@@ -7,10 +7,18 @@ from urllib.error import HTTPError
 from pathlib import Path
 from unittest.mock import patch
 
-from skm_importer.updater import LATEST_RELEASE_URL, UpdateInfo, check_for_update, download_update
+from skm_importer.updater import LATEST_RELEASE_URL, UpdateInfo, _log_update, check_for_update, download_update
 
 
 class UpdateCheckTests(unittest.TestCase):
+    def test_updater_diagnostics_are_written_to_local_app_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with patch.dict("os.environ", {"LOCALAPPDATA": temporary_directory}):
+                _log_update("test diagnostic")
+
+            log_path = Path(temporary_directory) / "SKM Importer" / "update.log"
+            self.assertIn("test diagnostic", log_path.read_text(encoding="utf-8"))
+
     def release_response(self, tag: str, download_url: str | None = None) -> io.BytesIO:
         release = {
             "tag_name": tag,
