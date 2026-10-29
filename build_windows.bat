@@ -35,7 +35,7 @@ if not exist ".venv\Scripts\python.exe" (
 if errorlevel 1 goto failed
 .venv\Scripts\python.exe -m pip install -r requirements-build.txt
 if errorlevel 1 goto failed
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name SKM-Importer --collect-all openpyxl --collect-all xlrd main.py
+.venv\Scripts\python.exe scripts\build_windows.py
 if errorlevel 1 goto failed
 
 echo.

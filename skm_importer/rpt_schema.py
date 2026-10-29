@@ -11,6 +11,8 @@ SECTION_DEFAULTS = {
         "InService": "1",
         "Phase": "7",
         "Size/Do Not Size": "0",
+        "KeyInLibrary": "1",
+        "InsulationType": "PVC",
     },
     "2-Winding Transformer": {
         "InService": "1",

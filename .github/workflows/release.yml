@@ -41,9 +41,7 @@ jobs:
           "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build standalone app
-        run: >-
-          python -m PyInstaller --noconfirm --clean --onefile --windowed
-          --name SKM-Importer --collect-all openpyxl --collect-all xlrd main.py
+        run: python scripts/build_windows.py
 
       - name: Publish GitHub release
         env:

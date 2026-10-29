@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.build_windows import find_runtime_dlls
 from scripts.stamp_version import normalize_release_version, stamp_version
 
 
@@ -27,6 +28,23 @@ class ReleaseVersionTests(unittest.TestCase):
 
             self.assertEqual(tag, "v0.1.2.3")
             self.assertEqual(version_file.read_text(encoding="ascii"), '__version__ = "0.1.2.3"\n')
+
+
+class RuntimeBundlingTests(unittest.TestCase):
+    def test_finds_vc_runtime_dlls_in_python_build_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            for name in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"):
+                (directory / name).touch()
+
+            dlls = find_runtime_dlls((directory,))
+
+        self.assertEqual({path.name for path in dlls}, {"vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"})
+
+    def test_requires_core_vc_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaisesRegex(RuntimeError, "vcruntime140.dll"):
+                find_runtime_dlls((Path(temporary_directory),))
 
 
 if __name__ == "__main__":

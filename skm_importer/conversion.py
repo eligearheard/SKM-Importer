@@ -62,7 +62,7 @@ def build_records(
                     "cable_size": _text(_cell(values, 10)),
                     "length": _text(_cell(values, 11)),
                     "conductor_material": _text(_cell(values, 12)),
-                    "insulation": _text(_cell(values, 13)),
+                    "cable_type": _text(_cell(values, 13)),
                     "raceway": _text(_cell(values, 14)),
                     "feeder_configuration": _text(_cell(values, 15)),
                     "protection_manufacturer": _text(_cell(values, 19)),
