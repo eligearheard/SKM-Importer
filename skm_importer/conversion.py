@@ -5,7 +5,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from .rpt_schema import SECTION_FIELDS
+from .rpt_schema import SECTION_DEFAULTS, SECTION_FIELDS
 
 
 def build_records(
@@ -39,6 +39,8 @@ def build_records(
         utilities: dict[str, tuple[str, str]] = {}
         cable_names: set[str] = set()
         device_names: set[str] = set()
+        cable_indexes: dict[str, int] = {}
+        incoming_cables: dict[str, str] = {}
         sheet = workbook["FIELD CABLEOCP"]
 
         for row_number, values in enumerate(sheet.iter_rows(min_row=6, values_only=True), start=6):
@@ -67,8 +69,98 @@ def build_records(
                     "protection_model": _text(_cell(values, 20)),
                     "interrupting_rating": _text(_cell(values, 21)),
                     "sensor_or_plug_rating": _text(_cell(values, 22)),
+                    "breaker_settings": {
+                        column: _text(_cell(values, index))
+                        for column, index in zip("XYZ", (23, 24, 25))
+                    } | {
+                        column: _text(_cell(values, index))
+                        for column, index in zip(("AA", "AB", "AC", "AD", "AE"), range(26, 31))
+                    },
                 },
             )
+
+            protection_values = tuple(_text(_cell(values, column)) for column in (19, 20, 21, 22))
+            has_protection = any(protection_values)
+            settings_values = {
+                column: _text(_cell(values, index))
+                for column, index in zip(("X", "Y", "Z", "AA", "AB", "AC", "AD", "AE"), range(23, 31))
+                if _text(_cell(values, index))
+            }
+            is_main_protection = has_protection and (
+                load_type in {"CB MAIN", "FUSE MAIN"} or not load_type
+            )
+            if source_type and source_label and is_main_protection:
+                source_ref = _endpoint_ref(source_type, source_label, _text(_cell(values, 5)), transformer_sides)
+                if source_ref is None:
+                    _warn(warnings, f"{row_context}: main protective device has an unresolved source endpoint.", log)
+                    continue
+                incoming_cable_name = incoming_cables.get(source_ref)
+                if incoming_cable_name is None:
+                    _warn(warnings, f"{row_context}: no incoming feeder was found for the main protective device.", log)
+                    continue
+
+                cable_index = cable_indexes[incoming_cable_name]
+                cable_fields = SECTION_FIELDS["Cable"]
+                incoming_record = dict(zip(cable_fields, records["Cable"][cable_index]))
+                if incoming_record["ConnectedComponent2"] != source_ref:
+                    _warn(
+                        warnings,
+                        f"{row_context}: incoming feeder {incoming_cable_name} already terminates at {incoming_record['ConnectedComponent2']}; main device was not inserted.",
+                        log,
+                    )
+                    continue
+
+                equipment_label = f"{source_type} {source_label}"
+                model = _text(_cell(values, 20))
+                device_name = _device_name(load_type, equipment_label, model)
+                if device_name in device_names:
+                    device_name = f"{device_name} {row_number}"
+                    _warn(warnings, f"{row_context}: duplicate main-device name; generated {device_name}.", log)
+                device_names.add(device_name)
+                if settings_values:
+                    _warn(
+                        warnings,
+                        f"{row_context}: breaker settings {settings_values} were not translated because the SKM setting syntax is model-specific.",
+                        log,
+                    )
+
+                voltage = buses.get(_node_name(source_type, source_label), {}).get("SystemNominalVoltage", "")
+                if not voltage:
+                    voltage = _text(_cell(values, 5))
+                protection_code = _protection_code(device_name, model)
+                if not protection_code:
+                    _warn(warnings, f"{row_context}: protective-device type is unknown; left its SKM type blank.", log)
+                incoming_record["ConnectedComponent2"] = f"{device_name}:1"
+                records["Cable"][cable_index] = tuple(incoming_record[field] for field in cable_fields)
+                log.debug(
+                    "%s inserted %s between feeder %s and bus %s:1",
+                    row_context,
+                    device_name,
+                    incoming_cable_name,
+                    source_ref.removesuffix(":1"),
+                )
+                _append_record(
+                    records,
+                    "Protective Device",
+                    {
+                        "ComponentName": device_name,
+                        "ComponentType": "112",
+                        "ConnectedComponent1": f"{incoming_cable_name}:2",
+                        "ConnectedComponent2": source_ref,
+                        "SystemNominalVoltage": voltage,
+                        "ProtectionType": protection_code,
+                        "Manufacturer": _text(_cell(values, 19)),
+                        "Type": model,
+                        "FrameVoltage": voltage,
+                        "InterruptingRating": _text(_cell(values, 21)),
+                        "Sensor/Trip": _text(_cell(values, 22)),
+                        "Plug": _text(_cell(values, 22)),
+                    },
+                    logger=log,
+                    context=row_context,
+                )
+                continue
+
             if not all((source_type, source_label, load_type, load_label)):
                 _warn(warnings, f"{row_context}: skipped because a source or load type/label is missing.", log)
                 continue
@@ -103,7 +195,6 @@ def build_records(
                 continue
             cable_names.add(cable_name)
 
-            has_protection = any(_text(_cell(values, column)) for column in (19, 20, 21, 22))
             device_name = _device_name(load_type, load_label, _text(_cell(values, 20)))
             if has_protection:
                 if device_name in device_names:
@@ -154,6 +245,8 @@ def build_records(
                 logger=log,
                 context=row_context,
             )
+            cable_indexes[cable_name] = len(records["Cable"]) - 1
+            incoming_cables[load_ref] = cable_name
             if not _text(_cell(values, 10)) or not _text(_cell(values, 11)):
                 _warn(warnings, f"{row_context}: {cable_name} is missing cable size or length.", log)
 
@@ -327,6 +420,7 @@ def _append_record(
     log = logger or logging.getLogger(__name__)
     log.debug("Building %s record%s; mapped fields: %s", section, f" from {context}" if context else "", values)
     record = {field: "" for field in SECTION_FIELDS[section]}
+    record.update(SECTION_DEFAULTS.get(section, {}))
     for field, value in values.items():
         if field not in record:
             raise ValueError(f"Unknown {section} field: {field}")
