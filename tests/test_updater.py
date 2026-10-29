@@ -38,6 +38,38 @@ class UpdateCheckTests(unittest.TestCase):
             ),
         )
 
+    def test_detects_update_from_four_part_app_version(self) -> None:
+        with patch("skm_importer.updater.urllib.request.urlopen", return_value=self.release_response("v0.1.2.2")):
+            update = check_for_update("0.1.2.1")
+
+        self.assertIsNotNone(update)
+        self.assertEqual(update.version, "0.1.2.2")
+
+    def test_detects_update_with_arbitrary_version_component_count(self) -> None:
+        with patch(
+            "skm_importer.updater.urllib.request.urlopen",
+            return_value=self.release_response("v0.1.2.1.5"),
+        ):
+            update = check_for_update("0.1.2.1.4")
+
+        self.assertIsNotNone(update)
+        self.assertEqual(update.version, "0.1.2.1.5")
+
+    def test_three_part_and_four_part_versions_compare_equally_when_padded(self) -> None:
+        with patch("skm_importer.updater.urllib.request.urlopen", return_value=self.release_response("v0.1.2.0")):
+            update = check_for_update("0.1.2")
+
+        self.assertIsNone(update)
+
+    def test_trailing_zero_components_do_not_create_an_update(self) -> None:
+        with patch(
+            "skm_importer.updater.urllib.request.urlopen",
+            return_value=self.release_response("v0.1.2.1.0.0"),
+        ):
+            update = check_for_update("0.1.2.1")
+
+        self.assertIsNone(update)
+
     def test_reports_when_no_public_release_exists(self) -> None:
         error = HTTPError(LATEST_RELEASE_URL, 404, "Not Found", None, None)
         with patch("skm_importer.updater.urllib.request.urlopen", side_effect=error):

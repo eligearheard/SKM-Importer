@@ -25,11 +25,16 @@ class UpdateInfo:
     sha256: str | None
 
 
-def _version_key(version: str) -> tuple[int, int, int]:
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", version)
+def _version_key(version: str) -> tuple[int, ...]:
+    match = re.fullmatch(r"v?(\d+(?:\.\d+)*)(?:[-+][0-9A-Za-z.-]+)?", version)
     if not match:
         raise ValueError(f"Invalid application version: {version}")
-    return tuple(int(part) for part in match.groups())
+    parts = tuple(int(part) for part in match.group(1).split("."))
+    if len(parts) < 3:
+        raise ValueError(f"Invalid application version: {version}")
+    while len(parts) > 3 and parts[-1] == 0:
+        parts = parts[:-1]
+    return parts
 
 
 def check_for_update(current_version: str) -> UpdateInfo | None:
