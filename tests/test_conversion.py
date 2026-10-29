@@ -26,21 +26,27 @@ class WorkbookConversionTests(unittest.TestCase):
             transformer_sheet.append([])
         transformer_sheet.append([1, "TRANS TX1", 480, 208, 75, 5.5, "DRY", "DELTA - WYE GND", 3.15])
 
-            bus_duct_sheet = workbook.create_sheet("BUS DUCT")
-            for _ in range(5):
-                bus_duct_sheet.append([])
-            bus_duct_sheet.append([1, "BUS RISER 1", "Spectra", 2000, 100, "GE", "AL"])
+        bus_duct_sheet = workbook.create_sheet("BUS DUCT")
+        for _ in range(5):
+            bus_duct_sheet.append([])
+        bus_duct_sheet.append([1, "BUS RISER 1", "Spectra", 2000, 100, "GE", "AL"])
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "survey.xlsx"
             output_path = Path(temporary_directory) / "generated.rpt"
+            log_path = output_path.with_suffix(".log")
             workbook.save(path)
             records, warnings = build_records(path)
             workbook_summary, report_summary = generate_import_report(path, output_path)
+            log_text = log_path.read_text(encoding="utf-8")
 
         self.assertEqual(len(warnings), 1)
         self.assertIn("construction type was not mapped for 1 records", warnings[0])
         self.assertTrue(output_path.is_file())
+        self.assertTrue(log_path.is_file())
+        self.assertIn("FIELD CABLEOCP row 6 inputs", log_text)
+        self.assertIn("mapped fields", log_text)
+        self.assertIn("Generation completed successfully", log_text)
         self.assertEqual(report_summary.errors, warnings)
         self.assertEqual(len(workbook_summary.sheets), 3)
         transformer = dict(zip(SECTION_FIELDS["2-Winding Transformer"], records["2-Winding Transformer"][0]))

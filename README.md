@@ -25,7 +25,7 @@ git push origin v0.1.0
 
 Run `setup.bat` once, then `run.bat`. This creates a local virtual environment and installs the dependencies.
 
-The app reads `.xlsx` and `.xlsm` field-survey workbooks and generates an SKM `.rpt` using its built-in section and field schema; no reference report is needed. It currently maps feeder/cable, bus, bus duct, utility, and two-winding transformer data. Values not present in the workbook are left blank, and skipped or incomplete records are reported as validation warnings. Review the generated report and warnings before importing it into SKM.
+The app reads `.xlsx` and `.xlsm` field-survey workbooks and generates an SKM `.rpt` using its built-in section and field schema; no reference report is needed. It currently maps feeder/cable, bus, bus duct, utility, and two-winding transformer data. Values not present in the workbook are left blank, and skipped or incomplete records are reported as validation warnings. Each run also writes a detailed `.log` beside the report, including workbook scan progress, row mappings, generated records, warnings, and exceptions. The log for a given report is replaced on the next run. Review the generated report and warnings before importing it into SKM.
 
 ## Run tests
 

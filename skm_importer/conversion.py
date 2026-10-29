@@ -1,4 +1,5 @@
 from collections import defaultdict
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -9,23 +10,32 @@ from .rpt_schema import SECTION_FIELDS
 
 def build_records(
     workbook_path: str | Path,
+    logger: logging.Logger | None = None,
 ) -> tuple[dict[str, list[tuple[str, ...]]], tuple[str, ...]]:
     path = Path(workbook_path)
+    log = logger or logging.getLogger(__name__)
+    log.info("Opening workbook for SKM conversion: %s", path)
     if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+        log.error("Unsupported input extension: %s", path.suffix)
         raise ValueError("Generating SKM reports requires an .xlsx or .xlsm workbook.")
     if not path.is_file():
+        log.error("Input workbook does not exist: %s", path)
         raise FileNotFoundError(f"Workbook not found: {path}")
 
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
+        log.info("Workbook opened; sheets: %s", workbook.sheetnames)
         if "FIELD CABLEOCP" not in workbook.sheetnames:
+            log.error("Required sheet FIELD CABLEOCP was not found")
             raise ValueError("The workbook is missing the FIELD CABLEOCP sheet.")
 
         records: dict[str, list[tuple[str, ...]]] = defaultdict(list)
         warnings: list[str] = []
-        transformer_sides = _transformers(workbook, records, warnings)
+        log.info("Converting transformer survey rows")
+        transformer_sides = _transformers(workbook, records, warnings, log)
         buses: dict[str, dict[str, str]] = {}
-        _bus_ducts(workbook, buses, warnings)
+        log.info("Converting bus duct survey rows")
+        _bus_ducts(workbook, buses, warnings, log)
         utilities: dict[str, tuple[str, str]] = {}
         cable_names: set[str] = set()
         device_names: set[str] = set()
@@ -36,16 +46,40 @@ def build_records(
             load_type, load_label = _text(_cell(values, 3)), _text(_cell(values, 4))
             if not any((source_type, source_label, load_type, load_label)):
                 continue
+            row_context = f"FIELD CABLEOCP row {row_number}"
+            log.debug(
+                "%s inputs: %s",
+                row_context,
+                {
+                    "source_type": source_type,
+                    "source_label": source_label,
+                    "load_type": load_type,
+                    "load_label": load_label,
+                    "voltage": _text(_cell(values, 5)),
+                    "conductors": _text(_cell(values, 9)),
+                    "cable_size": _text(_cell(values, 10)),
+                    "length": _text(_cell(values, 11)),
+                    "conductor_material": _text(_cell(values, 12)),
+                    "insulation": _text(_cell(values, 13)),
+                    "raceway": _text(_cell(values, 14)),
+                    "feeder_configuration": _text(_cell(values, 15)),
+                    "protection_manufacturer": _text(_cell(values, 19)),
+                    "protection_model": _text(_cell(values, 20)),
+                    "interrupting_rating": _text(_cell(values, 21)),
+                    "sensor_or_plug_rating": _text(_cell(values, 22)),
+                },
+            )
             if not all((source_type, source_label, load_type, load_label)):
-                warnings.append(f"FIELD CABLEOCP row {row_number}: skipped because a source or load type/label is missing.")
+                _warn(warnings, f"{row_context}: skipped because a source or load type/label is missing.", log)
                 continue
 
             voltage = _text(_cell(values, 5))
             source_ref = _endpoint_ref(source_type, source_label, voltage, transformer_sides)
             load_ref = _endpoint_ref(load_type, load_label, voltage, transformer_sides)
             if source_ref is None or load_ref is None:
-                warnings.append(f"FIELD CABLEOCP row {row_number}: skipped because a transformer endpoint is ambiguous or missing from XFMR.")
+                _warn(warnings, f"{row_context}: skipped because a transformer endpoint is ambiguous or missing from XFMR.", log)
                 continue
+            log.debug("%s endpoint resolution: source=%s load=%s", row_context, source_ref, load_ref)
 
             for component_type, label in ((source_type, source_label), (load_type, load_label)):
                 if component_type == "TRANS":
@@ -55,15 +89,17 @@ def build_records(
                 if voltage and not bus.get("SystemNominalVoltage"):
                     bus["SystemNominalVoltage"] = voltage
                 elif voltage and bus.get("SystemNominalVoltage") != voltage:
-                    warnings.append(
-                        f"FIELD CABLEOCP row {row_number}: {bus_name} has conflicting nominal voltages; kept {bus['SystemNominalVoltage']}."
+                    _warn(
+                        warnings,
+                        f"{row_context}: {bus_name} has conflicting nominal voltages; kept {bus['SystemNominalVoltage']}.",
+                        log,
                     )
                 if component_type == "UTILITY":
                     utilities[bus_name] = (f"UTILITY-{label}", voltage)
 
             cable_name = f"FEED {load_type} {load_label}"
             if cable_name in cable_names:
-                warnings.append(f"FIELD CABLEOCP row {row_number}: duplicate feeder name {cable_name}; skipped.")
+                _warn(warnings, f"{row_context}: duplicate feeder name {cable_name}; skipped.", log)
                 continue
             cable_names.add(cable_name)
 
@@ -72,11 +108,11 @@ def build_records(
             if has_protection:
                 if device_name in device_names:
                     device_name = f"{device_name} {row_number}"
-                    warnings.append(f"FIELD CABLEOCP row {row_number}: duplicate protection name; generated {device_name}.")
+                    _warn(warnings, f"{row_context}: duplicate protection name; generated {device_name}.", log)
                 device_names.add(device_name)
                 protection_code = _protection_code(device_name, _text(_cell(values, 20)))
                 if not protection_code:
-                    warnings.append(f"FIELD CABLEOCP row {row_number}: protective-device type is unknown; left its SKM type blank.")
+                    _warn(warnings, f"{row_context}: protective-device type is unknown; left its SKM type blank.", log)
                 _append_record(
                     records,
                     "Protective Device",
@@ -94,6 +130,8 @@ def build_records(
                         "Sensor/Trip": _text(_cell(values, 22)),
                         "Plug": _text(_cell(values, 22)),
                     },
+                    logger=log,
+                    context=row_context,
                 )
 
             _append_record(
@@ -113,12 +151,14 @@ def build_records(
                     "Conductor Desc": _text(_cell(values, 15)),
                     "#/Conductors": _conductor_count(_cell(values, 9)),
                 },
+                logger=log,
+                context=row_context,
             )
             if not _text(_cell(values, 10)) or not _text(_cell(values, 11)):
-                warnings.append(f"FIELD CABLEOCP row {row_number}: {cable_name} is missing cable size or length.")
+                _warn(warnings, f"{row_context}: {cable_name} is missing cable size or length.", log)
 
         for bus in buses.values():
-            _append_record(records, "Bus", bus)
+            _append_record(records, "Bus", bus, logger=log, context="FIELD CABLEOCP bus aggregation")
         for bus_name, (utility_name, voltage) in utilities.items():
             _append_record(
                 records,
@@ -129,8 +169,12 @@ def build_records(
                     "ConnectedComponent1": f"{bus_name}:1",
                     "SystemNominalVoltage": voltage,
                 },
+                logger=log,
+                context="UTILITY endpoint aggregation",
             )
 
+        log.info("Conversion completed; records by section: %s", {name: len(rows) for name, rows in records.items()})
+        log.info("Conversion completed with %d warning(s)", len(warnings))
         return dict(records), tuple(warnings)
     finally:
         workbook.close()
@@ -140,22 +184,25 @@ def _transformers(
     workbook: Any,
     records: dict[str, list[tuple[str, ...]]],
     warnings: list[str],
+    logger: logging.Logger,
 ) -> dict[str, tuple[str, str, str, str]]:
     sides: dict[str, tuple[str, str, str, str]] = {}
     unmapped_construction_types = 0
     if "XFMR" not in workbook.sheetnames:
+        logger.info("XFMR sheet not present; no transformer records to convert")
         return sides
 
     for row_number, values in enumerate(workbook["XFMR"].iter_rows(min_row=6, values_only=True), start=6):
         name = _text(_cell(values, 1))
         if not name:
             continue
+        context = f"XFMR row {row_number}"
         component_name = name if name.upper().startswith("TRANS ") else f"TRANS {name}"
         label = component_name[6:].strip()
         primary_bus, secondary_bus = f"{label} PRIM BUS", label
         primary_voltage, secondary_voltage = _text(_cell(values, 2)), _text(_cell(values, 3))
         if not primary_voltage or not secondary_voltage:
-            warnings.append(f"XFMR row {row_number}: {component_name} is missing a primary or secondary voltage.")
+            _warn(warnings, f"{context}: {component_name} is missing a primary or secondary voltage.", logger)
         if _text(_cell(values, 6)):
             unmapped_construction_types += 1
         sides[component_name.casefold()] = (primary_bus, secondary_bus, primary_voltage, secondary_voltage)
@@ -177,23 +224,34 @@ def _transformers(
                 "Rpos": resistance,
                 "Xpos": reactance,
             },
+            logger=logger,
+            context=context,
         )
-        _append_record(records, "Bus", {"ComponentName": primary_bus, "ComponentType": "10", "SystemNominalVoltage": primary_voltage})
-        _append_record(records, "Bus", {"ComponentName": secondary_bus, "ComponentType": "10", "SystemNominalVoltage": secondary_voltage})
+        _append_record(records, "Bus", {"ComponentName": primary_bus, "ComponentType": "10", "SystemNominalVoltage": primary_voltage}, logger=logger, context=context)
+        _append_record(records, "Bus", {"ComponentName": secondary_bus, "ComponentType": "10", "SystemNominalVoltage": secondary_voltage}, logger=logger, context=context)
     if unmapped_construction_types:
-        warnings.append(
-            f"XFMR: survey construction type was not mapped for {unmapped_construction_types} records; SKM transformer type fields were left blank."
+        _warn(
+            warnings,
+            f"XFMR: survey construction type was not mapped for {unmapped_construction_types} records; SKM transformer type fields were left blank.",
+            logger,
         )
     return sides
 
 
-def _bus_ducts(workbook: Any, buses: dict[str, dict[str, str]], warnings: list[str]) -> None:
+def _bus_ducts(
+    workbook: Any,
+    buses: dict[str, dict[str, str]],
+    warnings: list[str],
+    logger: logging.Logger,
+) -> None:
     if "BUS DUCT" not in workbook.sheetnames:
+        logger.info("BUS DUCT sheet not present; no bus duct records to convert")
         return
     for row_number, values in enumerate(workbook["BUS DUCT"].iter_rows(min_row=6, values_only=True), start=6):
         name = _text(_cell(values, 1))
         if not name:
             continue
+        context = f"BUS DUCT row {row_number}"
         component_name = name if name.upper().startswith("BUS RISER ") else f"BUS RISER {name}"
         bus = buses.setdefault(component_name, {"ComponentName": component_name, "ComponentType": "10"})
         bus.update(
@@ -203,8 +261,9 @@ def _bus_ducts(workbook: Any, buses: dict[str, dict[str, str]], warnings: list[s
                 "Description": _text(_cell(values, 2)),
             }
         )
+        logger.debug("%s mapped to Bus record %s: %s", context, component_name, bus)
         if not bus["ContinuousRating"]:
-            warnings.append(f"BUS DUCT row {row_number}: {component_name} is missing ampacity.")
+            _warn(warnings, f"{context}: {component_name} is missing ampacity.", logger)
 
 
 def _endpoint_ref(
@@ -262,13 +321,23 @@ def _append_record(
     records: dict[str, list[tuple[str, ...]]],
     section: str,
     values: dict[str, str],
+    logger: logging.Logger | None = None,
+    context: str = "",
 ) -> None:
+    log = logger or logging.getLogger(__name__)
+    log.debug("Building %s record%s; mapped fields: %s", section, f" from {context}" if context else "", values)
     record = {field: "" for field in SECTION_FIELDS[section]}
     for field, value in values.items():
         if field not in record:
             raise ValueError(f"Unknown {section} field: {field}")
         record[field] = value
     records.setdefault(section, []).append(tuple(record[field] for field in SECTION_FIELDS[section]))
+    log.debug("Built %s record %s with %d fields", section, record.get("ComponentName", "<unnamed>"), len(record))
+
+
+def _warn(warnings: list[str], message: str, logger: logging.Logger) -> None:
+    warnings.append(message)
+    logger.warning(message)
 
 
 def _cell(values: tuple[object, ...], index: int) -> object:

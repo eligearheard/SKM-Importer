@@ -256,7 +256,7 @@ class ImporterApp:
                     self.status.set(message)
                 elif event == "result":
                     self._show_result(*payload)
-                    self.status.set("Inspection complete")
+                    self.status.set("Report generation complete")
                     self.analyze_button.configure(state="normal")
                 elif event == "error":
                     self.status.set("Inspection failed")
@@ -301,6 +301,8 @@ class ImporterApp:
             self.results.insert("", "end", values=("SKM section", section.name, section.record_count, details), tags=tags)
         for error in (*workbook.errors, *report.errors):
             self.results.insert("", "end", values=("Issue", "Validation", "", error), tags=("warning",))
+        log_path = Path(report.path).with_suffix(".log")
+        self.results.insert("", "end", values=("Log", "Generator log", "", str(log_path)))
 
     def _clear_results(self) -> None:
         for item in self.results.get_children():
