@@ -164,10 +164,13 @@ class ImporterApp:
             self.workbook_path.set(path)
 
     def _choose_output(self) -> None:
+        workbook_path = self.workbook_path.get().strip()
+        initial_name = f"{Path(workbook_path).stem}-SKM-Import.rpt" if workbook_path else "SKM-Import.rpt"
         path = filedialog.asksaveasfilename(
             title="Save SKM import report",
             defaultextension=".rpt",
-            filetypes=[("SKM reports", "*.rpt"), ("All files", "*.*")],
+            initialfile=initial_name,
+            filetypes=[("SKM RPT files (*.rpt)", "*.rpt"), ("All files", "*.*")],
         )
         if path:
             self.output_path.set(path)
