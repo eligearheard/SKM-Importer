@@ -43,6 +43,9 @@ jobs:
       - name: Build standalone app
         run: python scripts/build_windows.py
 
+        - name: Run PyInstaller
+          run: >-
+            python -m PyInstaller --noconfirm --clean --onefile --windowed --name SKM-Importer --collect-all openpyxl --collect-all xlrd main.py
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
