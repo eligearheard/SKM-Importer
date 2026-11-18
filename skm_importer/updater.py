@@ -34,6 +34,42 @@ def _log_update(message: str) -> None:
         pass
 
 
+def _set_dll_directory(directory: str | None) -> None:
+    import ctypes
+
+    set_dll_directory = ctypes.WinDLL("kernel32", use_last_error=True).SetDllDirectoryW
+    set_dll_directory.argtypes = [ctypes.c_wchar_p]
+    set_dll_directory.restype = ctypes.c_int
+    if not set_dll_directory(directory):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _launch_update_helper(command: list[str], env: dict[str, str], creation_flags: int) -> None:
+    mei_pass = getattr(sys, "_MEIPASS", None)
+    if not mei_pass:
+        subprocess.Popen(command, env=env, creationflags=creation_flags, close_fds=True)
+        return
+
+    _set_dll_directory(None)
+    try:
+        subprocess.Popen(command, env=env, creationflags=creation_flags, close_fds=True)
+    finally:
+        _set_dll_directory(mei_pass)
+
+
+def _clean_pyinstaller_environment(env: dict[str, str], mei_pass: str | None) -> dict[str, str]:
+    clean_env = env.copy()
+    for key in list(clean_env):
+        normalized_key = key.upper()
+        if "_MEI" in normalized_key or normalized_key.startswith(("PYI_", "_PYI_")):
+            clean_env.pop(key)
+    if mei_pass:
+        paths = clean_env.get("PATH", "").split(os.pathsep)
+        clean_env["PATH"] = os.pathsep.join(path for path in paths if path != mei_pass)
+    clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return clean_env
+
+
 @dataclass(frozen=True)
 class UpdateInfo:
     version: str
@@ -140,14 +176,8 @@ def install_update(download_path: Path, version: str | None = None) -> None:
     )
 
     # 1. Clean PyInstaller environment leaks before calling PowerShell
-    clean_env = os.environ.copy()
-    for key in list(clean_env.keys()):
-        if "_MEI" in key.upper() or key.startswith("PYI_"):
-            clean_env.pop(key, None)
     mei_pass = getattr(sys, "_MEIPASS", None)
-    if mei_pass:
-        paths = clean_env.get("PATH", "").split(os.pathsep)
-        clean_env["PATH"] = os.pathsep.join(p for p in paths if p != mei_pass)
+    clean_env = _clean_pyinstaller_environment(os.environ, mei_pass)
 
     # 2. PowerShell helper with sanitized execution and brief wait to allow file unlock
     helper_path.write_text(
@@ -176,15 +206,18 @@ try {
     Write-UpdateLog "Placed downloaded executable at target=$TargetPath"
     
     # Strip any PyInstaller environment variables in PowerShell session
-    Get-ChildItem Env: | Where-Object { $_.Name -like "*MEI*" -or $_.Name -like "PYI*" } | ForEach-Object {
-        Remove-Item "Env:\$($_.Name)" -ErrorAction SilentlyContinue
+    Get-ChildItem Env: | Where-Object {
+        ($_.Name -like "*MEI*" -or $_.Name -like "PYI*" -or $_.Name -like "_PYI_*") -and
+        $_.Name -ne "PYINSTALLER_RESET_ENVIRONMENT"
+    } | ForEach-Object {
+        Remove-Item "Env:\\$($_.Name)" -ErrorAction SilentlyContinue
     }
 
     $PreviousReadyPath = $env:SKM_IMPORTER_UPDATE_READY_FILE
     $env:SKM_IMPORTER_UPDATE_READY_FILE = $ReadyPath
     $UpdatedProcess = Start-Process -FilePath $TargetPath -PassThru
     if ($null -eq $PreviousReadyPath) {
-        Remove-Item Env:\SKM_IMPORTER_UPDATE_READY_FILE -ErrorAction SilentlyContinue
+        Remove-Item Env:\\SKM_IMPORTER_UPDATE_READY_FILE -ErrorAction SilentlyContinue
     } else {
         $env:SKM_IMPORTER_UPDATE_READY_FILE = $PreviousReadyPath
     }
@@ -232,7 +265,7 @@ try {
     )
 
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    subprocess.Popen(
+    _launch_update_helper(
         [
             "powershell.exe",
             "-NoProfile",
@@ -255,6 +288,5 @@ try {
             str(ready_path),
         ],
         env=clean_env,
-        creationflags=creation_flags,
-        close_fds=True,
+        creation_flags=creation_flags,
     )

@@ -1,16 +1,77 @@
 import hashlib
 import io
 import json
+import os
+import sys
 import tempfile
 import unittest
 from urllib.error import HTTPError
 from pathlib import Path
 from unittest.mock import patch
 
-from skm_importer.updater import LATEST_RELEASE_URL, UpdateInfo, _log_update, check_for_update, download_update
+from skm_importer.updater import (
+    LATEST_RELEASE_URL,
+    UpdateInfo,
+    _clean_pyinstaller_environment,
+    _launch_update_helper,
+    _log_update,
+    check_for_update,
+    download_update,
+)
 
 
 class UpdateCheckTests(unittest.TestCase):
+    def test_clean_pyinstaller_environment_resets_bootloader_state(self) -> None:
+        clean_env = _clean_pyinstaller_environment(
+            {
+                "PATH": os.pathsep.join((r"C:\Temp\_MEI12345", r"C:\Windows")),
+                "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI12345",
+                "PYI_PARENT_PROCESS_LEVEL": "1",
+                "PYINSTALLER_RESET_ENVIRONMENT": "0",
+                "KEEP_ME": "value",
+            },
+            r"C:\Temp\_MEI12345",
+        )
+
+        self.assertEqual(clean_env["PATH"], r"C:\Windows")
+        self.assertNotIn("_PYI_APPLICATION_HOME_DIR", clean_env)
+        self.assertNotIn("PYI_PARENT_PROCESS_LEVEL", clean_env)
+        self.assertEqual(clean_env["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+        self.assertEqual(clean_env["KEEP_ME"], "value")
+
+    def test_update_helper_uses_system_dll_path_and_restores_frozen_path(self) -> None:
+        mei_pass = r"C:\Temp\_MEI12345"
+
+        with patch.object(sys, "_MEIPASS", mei_pass, create=True):
+            with patch("skm_importer.updater.subprocess.Popen") as popen:
+                def verify_dll_directory(path: str | None) -> None:
+                    self.assertEqual(popen.call_count, 0 if path is None else 1)
+
+                with patch("skm_importer.updater._set_dll_directory", side_effect=verify_dll_directory):
+                    _launch_update_helper(["powershell.exe"], {}, 0)
+
+        popen.assert_called_once_with(
+            ["powershell.exe"],
+            env={},
+            creationflags=0,
+            close_fds=True,
+        )
+
+    def test_update_helper_restores_frozen_path_if_launch_fails(self) -> None:
+        mei_pass = r"C:\Temp\_MEI12345"
+        calls: list[str | None] = []
+
+        with patch.object(sys, "_MEIPASS", mei_pass, create=True):
+            with patch(
+                "skm_importer.updater._set_dll_directory",
+                side_effect=lambda path: calls.append(path),
+            ):
+                with patch("skm_importer.updater.subprocess.Popen", side_effect=OSError("launch failed")):
+                    with self.assertRaisesRegex(OSError, "launch failed"):
+                        _launch_update_helper(["powershell.exe"], {}, 0)
+
+        self.assertEqual(calls, [None, mei_pass])
+
     def test_updater_diagnostics_are_written_to_local_app_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             with patch.dict("os.environ", {"LOCALAPPDATA": temporary_directory}):
