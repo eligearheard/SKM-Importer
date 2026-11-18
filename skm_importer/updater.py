@@ -87,9 +87,18 @@ def install_update(download_path: Path) -> None:
     target_path = Path(sys.executable).resolve()
     helper_path = Path(tempfile.gettempdir()) / f"skm-importer-update-{os.getpid()}.ps1"
     helper_path.write_text(
-        """param([int]$ProcessId, [string]$TargetPath, [string]$DownloadPath)
+        """param([string]$TargetPath, [string]$DownloadPath)
 $ErrorActionPreference = 'Stop'
-Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+$deadline = [DateTime]::UtcNow.AddSeconds(60)
+do {
+    $runningProcesses = Get-CimInstance -ClassName Win32_Process |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $TargetPath }
+    if (-not $runningProcesses) { break }
+    if ([DateTime]::UtcNow -ge $deadline) {
+        throw "Timed out waiting for SKM Importer processes to exit."
+    }
+    Start-Sleep -Milliseconds 250
+} while ($true)
 $BackupPath = "$TargetPath.previous"
 try {
     Remove-Item -LiteralPath $BackupPath -Force -ErrorAction SilentlyContinue
@@ -118,8 +127,6 @@ try {
             "Bypass",
             "-File",
             str(helper_path),
-            "-ProcessId",
-            str(os.getpid()),
             "-TargetPath",
             str(target_path),
             "-DownloadPath",

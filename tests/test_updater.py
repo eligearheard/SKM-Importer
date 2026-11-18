@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from skm_importer.updater import UpdateInfo, check_for_update, download_update
+from skm_importer.updater import UpdateInfo, check_for_update, download_update, install_update
 
 
 class UpdateCheckTests(unittest.TestCase):
@@ -55,6 +55,30 @@ class UpdateCheckTests(unittest.TestCase):
         with patch("skm_importer.updater.urllib.request.urlopen", return_value=io.BytesIO(b"invalid")):
             with self.assertRaisesRegex(RuntimeError, "SHA-256"):
                 download_update(update)
+
+    def test_installer_waits_for_all_app_processes_before_replacing_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            helper_dir = Path(temporary_directory)
+            executable_path = helper_dir / "SKM-Importer.exe"
+            downloaded_path = helper_dir / "download" / "SKM-Importer.exe"
+            downloaded_path.parent.mkdir()
+            downloaded_path.touch()
+            with (
+                patch("skm_importer.updater.sys.platform", "win32"),
+                patch("skm_importer.updater.sys.frozen", True, create=True),
+                patch("skm_importer.updater.sys.executable", str(executable_path)),
+                patch("skm_importer.updater.tempfile.gettempdir", return_value=temporary_directory),
+                patch("skm_importer.updater.os.getpid", return_value=123),
+                patch("skm_importer.updater.subprocess.Popen") as popen,
+            ):
+                install_update(downloaded_path)
+
+            script_path = helper_dir / "skm-importer-update-123.ps1"
+            script = script_path.read_text(encoding="utf-8")
+            self.assertIn("Get-CimInstance -ClassName Win32_Process", script)
+            self.assertIn("$_.ExecutablePath -ieq $TargetPath", script)
+            self.assertLess(script.index("$runningProcesses ="), script.index("Move-Item -LiteralPath $TargetPath"))
+            popen.assert_called_once()
 
 
 if __name__ == "__main__":
