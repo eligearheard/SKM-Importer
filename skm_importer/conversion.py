@@ -183,8 +183,13 @@ def build_records(
                         "ConnectedComponent2": source_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Description": _protection_description(protection_values),
+                        "Manufacturer": protection_values[0],
+                        "Type": model,
                         "FrameVoltage": voltage,
+                        "InterruptingRating": protection_values[2],
+                        "Sensor/Trip": protection_values[3],
+                        "Plug": protection_values[3],
+                        "ProtectiveDeviceLibName": model,
                     },
                     logger=log,
                     context=row_context,
@@ -245,8 +250,13 @@ def build_records(
                         "ConnectedComponent2": load_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Description": _protection_description(protection_values),
+                        "Manufacturer": protection_values[0],
+                        "Type": _text(_cell(values, 20)),
                         "FrameVoltage": voltage,
+                        "InterruptingRating": protection_values[2],
+                        "Sensor/Trip": protection_values[3],
+                        "Plug": protection_values[3],
+                        "ProtectiveDeviceLibName": _text(_cell(values, 20)),
                     },
                     logger=log,
                     context=row_context,
@@ -442,11 +452,6 @@ def _protection_code(device_name: str, model: str) -> str:
     if model.upper() in {"EHB", "LA", "NF", "QB", "QP", "TED", "TEY", "THQB", "TQD"}:
         return "11003"
     return ""
-
-
-def _protection_description(values: tuple[str, str, str, str]) -> str:
-    labels = ("Manufacturer", "Type", "AIC", "Sensor/Plug")
-    return "; ".join(f"{label}: {value}" for label, value in zip(labels, values) if value)
 
 
 def _append_record(
