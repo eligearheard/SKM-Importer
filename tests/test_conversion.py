@@ -10,6 +10,33 @@ from skm_importer.rpt_schema import SECTION_FIELDS
 
 
 class WorkbookConversionTests(unittest.TestCase):
+    def test_maps_cable_to_expected_library_entry(self) -> None:
+        workbook = Workbook()
+        cable_sheet = workbook.active
+        cable_sheet.title = "FIELD CABLEOCP"
+        for _ in range(5):
+            cable_sheet.append([None] * 32)
+        cable_sheet.append([90, "BP", "AHU-4", "STR", "AHU-4", 480, "VCB", "NO", None, 1, 10, 3, "CU", "THHN", "Magnetic", "4-1/C+G"])
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "survey.xlsx"
+            workbook.save(path)
+            records, warnings = build_records(path)
+
+        cable = dict(zip(SECTION_FIELDS["Cable"], records["Cable"][0]))
+        self.assertEqual(warnings, ())
+        self.assertEqual(cable["ConnectedComponent1"], "BP AHU-4:1")
+        self.assertEqual(cable["ConnectedComponent2"], "STR AHU-4:1")
+        self.assertEqual(cable["Manufacturer"], "IEEE 141 - Red Book")
+        self.assertEqual(cable["Description"], "NEC Table 310-16")
+        self.assertEqual(cable["DuctMaterial"], "Magnetic")
+        self.assertEqual(cable["InsulationClass"], "THHN")
+        self.assertEqual(cable["Installation"], "Conduit")
+        self.assertEqual(cable["VoltageRating"], "600")
+        self.assertEqual(cable["CableSize"], "10")
+        self.assertEqual(cable["CircularMils"], "10380")
+        self.assertEqual(cable["KeyInLibrary"], "1")
+
     def test_builds_skm_records_without_a_reference_report(self) -> None:
         workbook = Workbook()
         cable_sheet = workbook.active
@@ -76,7 +103,7 @@ class WorkbookConversionTests(unittest.TestCase):
         self.assertEqual(cable["InService"], "1")
         self.assertEqual(cable["Phase"], "7")
         self.assertEqual(cable["Size/Do Not Size"], "0")
-        self.assertEqual(cable["RacewayType"], "Magnetic")
+        self.assertEqual(cable["DuctMaterial"], "Magnetic")
         self.assertEqual(cable["KeyInLibrary"], "1")
         self.assertEqual(cable["InsulationType"], "PVC")
         self.assertEqual(cable["InsulationClass"], "XHHW")

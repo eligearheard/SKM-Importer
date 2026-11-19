@@ -8,6 +8,40 @@ from openpyxl import load_workbook
 from .rpt_schema import SECTION_DEFAULTS, SECTION_FIELDS
 
 
+_CIRCULAR_MILS_BY_AWG = {
+    "30": 100,
+    "28": 160,
+    "26": 250,
+    "24": 404,
+    "22": 642,
+    "20": 1020,
+    "18": 1620,
+    "16": 2580,
+    "14": 4110,
+    "13": 5180,
+    "12": 6530,
+    "11": 8230,
+    "10": 10380,
+    "9": 13090,
+    "8": 16510,
+    "7": 20820,
+    "6": 26240,
+    "5": 33090,
+    "4": 41740,
+    "3": 52620,
+    "2": 66360,
+    "1": 83690,
+    "0": 105600,
+    "00": 133100,
+    "000": 167800,
+    "0000": 211600,
+    "1/0": 105600,
+    "2/0": 133100,
+    "3/0": 167800,
+    "4/0": 211600,
+}
+
+
 def build_records(
     workbook_path: str | Path,
     logger: logging.Logger | None = None,
@@ -194,6 +228,7 @@ def build_records(
                 _warn(warnings, f"{row_context}: duplicate feeder name {cable_name}; skipped.", log)
                 continue
             cable_names.add(cable_name)
+            circular_mils = _circular_mils(_cell(values, 10))
 
             device_name = _device_name(load_type, load_label, _text(_cell(values, 20)))
             if has_protection:
@@ -238,8 +273,13 @@ def build_records(
                     "Length": _text(_cell(values, 11)),
                     "ConductorType": _conductor_type(_cell(values, 12)),
                     "InsulationClass": _text(_cell(values, 13)),
-                    "RacewayType": _text(_cell(values, 14)),
+                    "Manufacturer": "IEEE 141 - Red Book",
+                    "Description": "NEC Table 310-16",
+                    "DuctMaterial": _text(_cell(values, 14)),
                     "Conductor Desc": _text(_cell(values, 15)),
+                    "Installation": "Conduit",
+                    "VoltageRating": "600",
+                    "CircularMils": circular_mils,
                     "#/Conductors": _conductor_count(_cell(values, 9)),
                 },
                 logger=log,
@@ -249,6 +289,8 @@ def build_records(
             incoming_cables[load_ref] = cable_name
             if not _text(_cell(values, 10)) or not _text(_cell(values, 11)):
                 _warn(warnings, f"{row_context}: {cable_name} is missing cable size or length.", log)
+            elif not circular_mils:
+                _warn(warnings, f"{row_context}: {cable_name} has an unsupported cable size; circular mils were left blank.", log)
 
         for bus in buses.values():
             _append_record(records, "Bus", bus, logger=log, context="FIELD CABLEOCP bus aggregation")
@@ -456,6 +498,25 @@ def _conductor_count(value: object) -> str:
     except ValueError:
         return ""
     return str(count - 1) if 1 <= count <= 6 else ""
+
+
+def _circular_mils(value: object) -> str:
+    size = _text(value).upper().replace(" ", "")
+    if size.endswith("AWG"):
+        size = size[:-3]
+    if size in _CIRCULAR_MILS_BY_AWG:
+        return str(_CIRCULAR_MILS_BY_AWG[size])
+    for suffix in ("KCMIL", "MCM"):
+        if size.endswith(suffix):
+            size = size[: -len(suffix)]
+            break
+    try:
+        numeric_size = float(size)
+    except ValueError:
+        return ""
+    if not numeric_size.is_integer() or numeric_size <= 4:
+        return ""
+    return str(int(numeric_size) * 1000)
 
 
 def _connection_codes(connection: str) -> tuple[str, str]:
