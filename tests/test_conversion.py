@@ -6,6 +6,7 @@ from openpyxl import Workbook
 
 from skm_importer.conversion import build_records
 from skm_importer.pipeline import generate_import_report
+from skm_importer.rpt import write_default_report
 from skm_importer.rpt_schema import SECTION_FIELDS
 
 
@@ -36,6 +37,92 @@ class WorkbookConversionTests(unittest.TestCase):
         self.assertEqual(cable["CableSize"], "10")
         self.assertEqual(cable["CircularMils"], "10380")
         self.assertEqual(cable["KeyInLibrary"], "1")
+
+    def test_maps_fuse_without_aic_and_keeps_sensor_plug(self) -> None:
+        workbook = Workbook()
+        cable_sheet = workbook.active
+        cable_sheet.title = "FIELD CABLEOCP"
+        for _ in range(5):
+            cable_sheet.append([None] * 32)
+        cable_sheet.append([98, "BP", "MAIN", "PNL", "H4", 480, "VCB", "NO", None, 1, 10, 3, "CU", "THHN", "Magnetic", "4-1/C+G"])
+        fuse_row = [None] * 32
+        fuse_row[0:3] = [99, "PNL", "H4"]
+        fuse_row[19:23] = ["LITTELFUSE", "FLSRID", None, 70]
+        cable_sheet.append(fuse_row)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "survey.xlsx"
+            report_path = Path(temporary_directory) / "generated.rpt"
+            workbook.save(path)
+            records, warnings = build_records(path)
+            write_default_report(report_path, records)
+            report_lines = report_path.read_text(encoding="utf-8").splitlines()
+            device_section = report_lines.index("// --- Protective Device ---")
+            report_fuse = dict(
+                zip(
+                    SECTION_FIELDS["Protective Device"],
+                    report_lines[device_section + 2].split("\t"),
+                )
+            )
+
+        fuse = dict(zip(SECTION_FIELDS["Protective Device"], records["Protective Device"][0]))
+        self.assertEqual(warnings, ())
+        self.assertEqual(fuse["ProtectionType"], "11041")
+        self.assertEqual(fuse["Description"], "Manufacturer: LITTELFUSE; Type: FLSRID; Sensor/Plug: 70")
+        self.assertEqual(fuse["Manufacturer"], "")
+        self.assertEqual(fuse["Type"], "")
+        self.assertEqual(fuse["InterruptingRating"], "")
+        self.assertEqual(fuse["Sensor/Trip"], "")
+        self.assertEqual(fuse["Plug"], "")
+        self.assertEqual(fuse["ProtectiveDeviceLibName"], "")
+        self.assertEqual(report_fuse["Description"], fuse["Description"])
+        self.assertEqual(report_fuse["InterruptingRating"], "")
+        self.assertEqual(report_fuse["Sensor/Trip"], "")
+        self.assertEqual(report_fuse["Plug"], "")
+
+    def test_maps_breaker_manufacturer_type_aic_and_sensor_plug(self) -> None:
+        workbook = Workbook()
+        cable_sheet = workbook.active
+        cable_sheet.title = "FIELD CABLEOCP"
+        for _ in range(5):
+            cable_sheet.append([None] * 32)
+        breaker_row = [None] * 32
+        breaker_row[0:8] = [97, "BP", "PNL H4", "DISC", "PNL H4", 480, "VCB", "NO"]
+        breaker_row[9:16] = [1, 6, 3, "CU", "THHN", "Magnetic", "4-1/C+G"]
+        breaker_row[19:23] = ["FEDERAL PIONEER", "NF", 18, 100]
+        cable_sheet.append(breaker_row)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "survey.xlsx"
+            report_path = Path(temporary_directory) / "generated.rpt"
+            workbook.save(path)
+            records, warnings = build_records(path)
+            write_default_report(report_path, records)
+            report_lines = report_path.read_text(encoding="utf-8").splitlines()
+            device_section = report_lines.index("// --- Protective Device ---")
+            report_breaker = dict(
+                zip(
+                    SECTION_FIELDS["Protective Device"],
+                    report_lines[device_section + 2].split("\t"),
+                )
+            )
+
+        breaker = dict(zip(SECTION_FIELDS["Protective Device"], records["Protective Device"][0]))
+        self.assertEqual(warnings, ())
+        self.assertEqual(breaker["ProtectionType"], "11003")
+        self.assertEqual(breaker["Description"], "Manufacturer: FEDERAL PIONEER; Type: NF; AIC: 18; Sensor/Plug: 100")
+        self.assertEqual(breaker["Manufacturer"], "")
+        self.assertEqual(breaker["Type"], "")
+        self.assertEqual(breaker["InterruptingRating"], "")
+        self.assertEqual(breaker["Sensor/Trip"], "")
+        self.assertEqual(breaker["Plug"], "")
+        self.assertEqual(breaker["ProtectiveDeviceLibName"], "")
+        self.assertEqual(report_breaker["Description"], breaker["Description"])
+        self.assertEqual(report_breaker["Manufacturer"], "")
+        self.assertEqual(report_breaker["Type"], "")
+        self.assertEqual(report_breaker["InterruptingRating"], "")
+        self.assertEqual(report_breaker["Sensor/Trip"], "")
+        self.assertEqual(report_breaker["Plug"], "")
 
     def test_builds_skm_records_without_a_reference_report(self) -> None:
         workbook = Workbook()
@@ -71,11 +158,11 @@ class WorkbookConversionTests(unittest.TestCase):
             records, warnings = build_records(path)
             workbook_summary, report_summary = generate_import_report(path, output_path)
             log_text = log_path.read_text(encoding="utf-8")
+            self.assertTrue(output_path.is_file())
+            self.assertTrue(log_path.is_file())
 
         self.assertEqual(len(warnings), 1)
         self.assertIn("construction type was not mapped for 1 records", warnings[0])
-        self.assertTrue(output_path.is_file())
-        self.assertTrue(log_path.is_file())
         self.assertIn("FIELD CABLEOCP row 6 inputs", log_text)
         self.assertIn("mapped fields", log_text)
         self.assertIn("Generation completed successfully", log_text)
@@ -110,12 +197,13 @@ class WorkbookConversionTests(unittest.TestCase):
         self.assertEqual(protection["ComponentName"], "CB MAIN PNL L8C")
         self.assertEqual(protection["InService"], "1")
         self.assertEqual(protection["ProtectionType"], "11003")
-        self.assertEqual(protection["Manufacturer"], "GE")
-        self.assertEqual(protection["Type"], "TQD")
+        self.assertEqual(protection["Description"], "Manufacturer: GE; Type: TQD; AIC: 10; Sensor/Plug: 225")
+        self.assertEqual(protection["Manufacturer"], "")
+        self.assertEqual(protection["Type"], "")
         self.assertEqual(protection["ProtectiveDeviceLibName"], "")
-        self.assertEqual(protection["InterruptingRating"], "10")
-        self.assertEqual(protection["Sensor/Trip"], "225")
-        self.assertEqual(protection["Plug"], "225")
+        self.assertEqual(protection["InterruptingRating"], "")
+        self.assertEqual(protection["Sensor/Trip"], "")
+        self.assertEqual(protection["Plug"], "")
         self.assertEqual(protection["Poles"], "0")
         self.assertEqual(protection["INT/SC RatingBasis"], "0")
         self.assertEqual(protection["ConnectionType"], "2")

@@ -183,12 +183,8 @@ def build_records(
                         "ConnectedComponent2": source_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Manufacturer": _text(_cell(values, 19)),
-                        "Type": model,
+                        "Description": _protection_description(protection_values),
                         "FrameVoltage": voltage,
-                        "InterruptingRating": _text(_cell(values, 21)),
-                        "Sensor/Trip": _text(_cell(values, 22)),
-                        "Plug": _text(_cell(values, 22)),
                     },
                     logger=log,
                     context=row_context,
@@ -249,12 +245,8 @@ def build_records(
                         "ConnectedComponent2": load_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Manufacturer": _text(_cell(values, 19)),
-                        "Type": _text(_cell(values, 20)),
+                        "Description": _protection_description(protection_values),
                         "FrameVoltage": voltage,
-                        "InterruptingRating": _text(_cell(values, 21)),
-                        "Sensor/Trip": _text(_cell(values, 22)),
-                        "Plug": _text(_cell(values, 22)),
                     },
                     logger=log,
                     context=row_context,
@@ -450,6 +442,11 @@ def _protection_code(device_name: str, model: str) -> str:
     if model.upper() in {"EHB", "LA", "NF", "QB", "QP", "TED", "TEY", "THQB", "TQD"}:
         return "11003"
     return ""
+
+
+def _protection_description(values: tuple[str, str, str, str]) -> str:
+    labels = ("Manufacturer", "Type", "AIC", "Sensor/Plug")
+    return "; ".join(f"{label}: {value}" for label, value in zip(labels, values) if value)
 
 
 def _append_record(
