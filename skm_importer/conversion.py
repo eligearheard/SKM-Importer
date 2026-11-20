@@ -123,7 +123,7 @@ def build_records(
             if has_protection and settings_values:
                 _warn(
                     warnings,
-                    f"{row_context}: breaker settings {settings_values} were copied to the protective-device description as unverified placeholders; SKM settings were left blank.",
+                    f"{row_context}: breaker settings {settings_values} were not imported; SKM settings remain blank for manual verification.",
                     log,
                 )
             is_main_protection = has_protection and (
@@ -183,7 +183,13 @@ def build_records(
                         "ConnectedComponent2": source_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Description": _protection_placeholder(protection_values, settings_values),
+                        "Manufacturer": protection_values[0],
+                        "Type": model,
+                        "Frame/Model": model,
+                        "FrameVoltage": voltage,
+                        "InterruptingRating": protection_values[2],
+                        "Sensor/Trip": protection_values[3],
+                        "Plug": protection_values[3],
                         "ProtectiveDeviceLibName": "",
                     },
                     logger=log,
@@ -226,13 +232,14 @@ def build_records(
             cable_names.add(cable_name)
             circular_mils = _circular_mils(_cell(values, 10))
 
-            device_name = _device_name(load_type, load_label, _text(_cell(values, 20)))
+            model = _text(_cell(values, 20))
+            device_name = _device_name(load_type, load_label, model)
             if has_protection:
                 if device_name in device_names:
                     device_name = f"{device_name} {row_number}"
                     _warn(warnings, f"{row_context}: duplicate protection name; generated {device_name}.", log)
                 device_names.add(device_name)
-                protection_code = _protection_code(device_name, _text(_cell(values, 20)))
+                protection_code = _protection_code(device_name, model)
                 if not protection_code:
                     _warn(warnings, f"{row_context}: protective-device type is unknown; left its SKM type blank.", log)
                 _append_record(
@@ -245,7 +252,13 @@ def build_records(
                         "ConnectedComponent2": load_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Description": _protection_placeholder(protection_values, settings_values),
+                        "Manufacturer": protection_values[0],
+                        "Type": model,
+                        "Frame/Model": model,
+                        "FrameVoltage": voltage,
+                        "InterruptingRating": protection_values[2],
+                        "Sensor/Trip": protection_values[3],
+                        "Plug": protection_values[3],
                         "ProtectiveDeviceLibName": "",
                     },
                     logger=log,
@@ -442,26 +455,6 @@ def _protection_code(device_name: str, model: str) -> str:
     if model.upper() in {"EHB", "LA", "NF", "QB", "QP", "TED", "TEY", "THQB", "TQD"}:
         return "11003"
     return ""
-
-
-def _protection_placeholder(
-    protection_values: tuple[str, ...],
-    settings_values: dict[str, str],
-) -> str:
-    labels = ("Manufacturer", "Model/Type", "Interrupting rating", "Sensor/plug rating")
-    details = [
-        f"{label}: {' '.join(value.split())}"
-        for label, value in zip(labels, protection_values)
-        if value
-    ]
-    details.extend(
-        f"{column}: {' '.join(value.split())}"
-        for column, value in settings_values.items()
-    )
-    placeholder = "UNVERIFIED SURVEY DATA - NOT APPLIED OR LIBRARY-LINKED"
-    if details:
-        placeholder += "; " + "; ".join(details)
-    return placeholder
 
 
 def _append_record(
