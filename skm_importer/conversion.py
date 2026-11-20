@@ -120,6 +120,12 @@ def build_records(
                 for column, index in zip(("X", "Y", "Z", "AA", "AB", "AC", "AD", "AE"), range(23, 31))
                 if _text(_cell(values, index))
             }
+            if has_protection and settings_values:
+                _warn(
+                    warnings,
+                    f"{row_context}: breaker settings {settings_values} were copied to the protective-device description as unverified placeholders; SKM settings were left blank.",
+                    log,
+                )
             is_main_protection = has_protection and (
                 load_type in {"CB MAIN", "FUSE MAIN"} or not load_type
             )
@@ -151,12 +157,6 @@ def build_records(
                     device_name = f"{device_name} {row_number}"
                     _warn(warnings, f"{row_context}: duplicate main-device name; generated {device_name}.", log)
                 device_names.add(device_name)
-                if settings_values:
-                    _warn(
-                        warnings,
-                        f"{row_context}: breaker settings {settings_values} were not translated because the SKM setting syntax is model-specific.",
-                        log,
-                    )
 
                 voltage = buses.get(_node_name(source_type, source_label), {}).get("SystemNominalVoltage", "")
                 if not voltage:
@@ -183,12 +183,8 @@ def build_records(
                         "ConnectedComponent2": source_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Manufacturer": protection_values[0],
-                        "Type": model,
-                        "FrameVoltage": voltage,
-                        "InterruptingRating": protection_values[2],
-                        "Sensor/Trip": protection_values[3],
-                        "Plug": protection_values[3],
+                        "Description": _protection_placeholder(protection_values, settings_values),
+                        "ProtectiveDeviceLibName": "",
                     },
                     logger=log,
                     context=row_context,
@@ -249,12 +245,8 @@ def build_records(
                         "ConnectedComponent2": load_ref,
                         "SystemNominalVoltage": voltage,
                         "ProtectionType": protection_code,
-                        "Manufacturer": protection_values[0],
-                        "Type": _text(_cell(values, 20)),
-                        "FrameVoltage": voltage,
-                        "InterruptingRating": protection_values[2],
-                        "Sensor/Trip": protection_values[3],
-                        "Plug": protection_values[3],
+                        "Description": _protection_placeholder(protection_values, settings_values),
+                        "ProtectiveDeviceLibName": "",
                     },
                     logger=log,
                     context=row_context,
@@ -450,6 +442,26 @@ def _protection_code(device_name: str, model: str) -> str:
     if model.upper() in {"EHB", "LA", "NF", "QB", "QP", "TED", "TEY", "THQB", "TQD"}:
         return "11003"
     return ""
+
+
+def _protection_placeholder(
+    protection_values: tuple[str, ...],
+    settings_values: dict[str, str],
+) -> str:
+    labels = ("Manufacturer", "Model/Type", "Interrupting rating", "Sensor/plug rating")
+    details = [
+        f"{label}: {' '.join(value.split())}"
+        for label, value in zip(labels, protection_values)
+        if value
+    ]
+    details.extend(
+        f"{column}: {' '.join(value.split())}"
+        for column, value in settings_values.items()
+    )
+    placeholder = "UNVERIFIED SURVEY DATA - NOT APPLIED OR LIBRARY-LINKED"
+    if details:
+        placeholder += "; " + "; ".join(details)
+    return placeholder
 
 
 def _append_record(

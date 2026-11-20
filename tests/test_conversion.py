@@ -38,7 +38,7 @@ class WorkbookConversionTests(unittest.TestCase):
         self.assertEqual(cable["CircularMils"], "10380")
         self.assertEqual(cable["KeyInLibrary"], "1")
 
-    def test_maps_fuse_without_aic_and_keeps_sensor_plug(self) -> None:
+    def test_writes_fuse_survey_values_as_unverified_placeholders(self) -> None:
         workbook = Workbook()
         cable_sheet = workbook.active
         cable_sheet.title = "FIELD CABLEOCP"
@@ -48,6 +48,7 @@ class WorkbookConversionTests(unittest.TestCase):
         fuse_row = [None] * 32
         fuse_row[0:3] = [99, "PNL", "H4"]
         fuse_row[19:23] = ["GOULD SHAWMUT", "A4BY", None, 2000]
+        fuse_row[23:31] = [0.8, 10, 5, 0.3, 10, 0.1, 8, 0.05]
         cable_sheet.append(fuse_row)
 
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -66,24 +67,33 @@ class WorkbookConversionTests(unittest.TestCase):
             )
 
         fuse = dict(zip(SECTION_FIELDS["Protective Device"], records["Protective Device"][0]))
-        self.assertEqual(warnings, ())
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("SKM settings were left blank", warnings[0])
         self.assertEqual(fuse["ProtectionType"], "11041")
-        self.assertEqual(fuse["Description"], "")
-        self.assertEqual(fuse["Manufacturer"], "GOULD SHAWMUT")
-        self.assertEqual(fuse["Type"], "A4BY")
+        self.assertIn("UNVERIFIED SURVEY DATA - NOT APPLIED OR LIBRARY-LINKED", fuse["Description"])
+        self.assertIn("Manufacturer: GOULD SHAWMUT", fuse["Description"])
+        self.assertIn("Model/Type: A4BY", fuse["Description"])
+        self.assertIn("Sensor/plug rating: 2000", fuse["Description"])
+        self.assertIn("X: 0.8", fuse["Description"])
+        self.assertIn("AE: 0.05", fuse["Description"])
+        self.assertEqual(fuse["Manufacturer"], "")
+        self.assertEqual(fuse["Type"], "")
         self.assertEqual(fuse["InterruptingRating"], "")
-        self.assertEqual(fuse["Sensor/Trip"], "2000")
-        self.assertEqual(fuse["Plug"], "2000")
+        self.assertEqual(fuse["Sensor/Trip"], "")
+        self.assertEqual(fuse["Plug"], "")
         self.assertEqual(fuse["ProtectiveDeviceLibName"], "")
-        self.assertEqual(report_fuse["Description"], "")
-        self.assertEqual(report_fuse["Manufacturer"], "GOULD SHAWMUT")
-        self.assertEqual(report_fuse["Type"], "A4BY")
+        self.assertEqual(fuse["Settings"], "")
+        self.assertIn("UNVERIFIED SURVEY DATA", report_fuse["Description"])
+        self.assertIn("X: 0.8", report_fuse["Description"])
+        self.assertEqual(report_fuse["Manufacturer"], "")
+        self.assertEqual(report_fuse["Type"], "")
         self.assertEqual(report_fuse["InterruptingRating"], "")
-        self.assertEqual(report_fuse["Sensor/Trip"], "2000")
-        self.assertEqual(report_fuse["Plug"], "2000")
+        self.assertEqual(report_fuse["Sensor/Trip"], "")
+        self.assertEqual(report_fuse["Plug"], "")
         self.assertEqual(report_fuse["ProtectiveDeviceLibName"], "")
+        self.assertEqual(report_fuse["Settings"], "")
 
-    def test_maps_breaker_manufacturer_type_aic_and_sensor_plug(self) -> None:
+    def test_writes_breaker_survey_values_as_unverified_placeholders(self) -> None:
         workbook = Workbook()
         cable_sheet = workbook.active
         cable_sheet.title = "FIELD CABLEOCP"
@@ -93,6 +103,7 @@ class WorkbookConversionTests(unittest.TestCase):
         breaker_row[0:8] = [97, "BP", "PNL H4", "DISC", "PNL H4", 480, "VCB", "NO"]
         breaker_row[9:16] = [1, 6, 3, "CU", "THHN", "Magnetic", "4-1/C+G"]
         breaker_row[19:23] = ["FEDERAL PIONEER", "NF", 18, 100]
+        breaker_row[23:31] = [0.8, 10, 5, 0.3, 10, 0.1, 8, 0.05]
         cable_sheet.append(breaker_row)
 
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -111,22 +122,31 @@ class WorkbookConversionTests(unittest.TestCase):
             )
 
         breaker = dict(zip(SECTION_FIELDS["Protective Device"], records["Protective Device"][0]))
-        self.assertEqual(warnings, ())
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("SKM settings were left blank", warnings[0])
         self.assertEqual(breaker["ProtectionType"], "11003")
-        self.assertEqual(breaker["Description"], "")
-        self.assertEqual(breaker["Manufacturer"], "FEDERAL PIONEER")
-        self.assertEqual(breaker["Type"], "NF")
-        self.assertEqual(breaker["InterruptingRating"], "18")
-        self.assertEqual(breaker["Sensor/Trip"], "100")
-        self.assertEqual(breaker["Plug"], "100")
+        self.assertIn("UNVERIFIED SURVEY DATA", breaker["Description"])
+        self.assertIn("Manufacturer: FEDERAL PIONEER", breaker["Description"])
+        self.assertIn("Model/Type: NF", breaker["Description"])
+        self.assertIn("Interrupting rating: 18", breaker["Description"])
+        self.assertIn("Sensor/plug rating: 100", breaker["Description"])
+        self.assertIn("X: 0.8", breaker["Description"])
+        self.assertIn("AE: 0.05", breaker["Description"])
+        self.assertEqual(breaker["Manufacturer"], "")
+        self.assertEqual(breaker["Type"], "")
+        self.assertEqual(breaker["InterruptingRating"], "")
+        self.assertEqual(breaker["Sensor/Trip"], "")
+        self.assertEqual(breaker["Plug"], "")
         self.assertEqual(breaker["ProtectiveDeviceLibName"], "")
-        self.assertEqual(report_breaker["Description"], "")
-        self.assertEqual(report_breaker["Manufacturer"], "FEDERAL PIONEER")
-        self.assertEqual(report_breaker["Type"], "NF")
-        self.assertEqual(report_breaker["InterruptingRating"], "18")
-        self.assertEqual(report_breaker["Sensor/Trip"], "100")
-        self.assertEqual(report_breaker["Plug"], "100")
+        self.assertEqual(breaker["Settings"], "")
+        self.assertIn("UNVERIFIED SURVEY DATA", report_breaker["Description"])
+        self.assertEqual(report_breaker["Manufacturer"], "")
+        self.assertEqual(report_breaker["Type"], "")
+        self.assertEqual(report_breaker["InterruptingRating"], "")
+        self.assertEqual(report_breaker["Sensor/Trip"], "")
+        self.assertEqual(report_breaker["Plug"], "")
         self.assertEqual(report_breaker["ProtectiveDeviceLibName"], "")
+        self.assertEqual(report_breaker["Settings"], "")
 
     def test_builds_skm_records_without_a_reference_report(self) -> None:
         workbook = Workbook()
@@ -201,13 +221,16 @@ class WorkbookConversionTests(unittest.TestCase):
         self.assertEqual(protection["ComponentName"], "CB MAIN PNL L8C")
         self.assertEqual(protection["InService"], "1")
         self.assertEqual(protection["ProtectionType"], "11003")
-        self.assertEqual(protection["Description"], "")
-        self.assertEqual(protection["Manufacturer"], "GE")
-        self.assertEqual(protection["Type"], "TQD")
+        self.assertIn("UNVERIFIED SURVEY DATA", protection["Description"])
+        self.assertIn("Manufacturer: GE", protection["Description"])
+        self.assertIn("Model/Type: TQD", protection["Description"])
+        self.assertEqual(protection["Manufacturer"], "")
+        self.assertEqual(protection["Type"], "")
         self.assertEqual(protection["ProtectiveDeviceLibName"], "")
-        self.assertEqual(protection["InterruptingRating"], "10")
-        self.assertEqual(protection["Sensor/Trip"], "225")
-        self.assertEqual(protection["Plug"], "225")
+        self.assertEqual(protection["InterruptingRating"], "")
+        self.assertEqual(protection["Sensor/Trip"], "")
+        self.assertEqual(protection["Plug"], "")
+        self.assertEqual(protection["Settings"], "")
         self.assertEqual(protection["Poles"], "0")
         self.assertEqual(protection["INT/SC RatingBasis"], "0")
         self.assertEqual(protection["ConnectionType"], "2")
