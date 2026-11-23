@@ -1,4 +1,5 @@
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 import logging
 from pathlib import Path
 from typing import Any
@@ -69,7 +70,7 @@ def build_records(
         transformer_sides = _transformers(workbook, records, warnings, log)
         buses: dict[str, dict[str, str]] = {}
         log.info("Converting bus duct survey rows")
-        _bus_ducts(workbook, buses, warnings, log)
+        bus_duct_data = _bus_ducts(workbook, buses, warnings, log)
         utilities: dict[str, tuple[str, str]] = {}
         cable_names: set[str] = set()
         device_names: set[str] = set()
@@ -77,11 +78,87 @@ def build_records(
         incoming_cables: dict[str, str] = {}
         sheet = workbook["FIELD CABLEOCP"]
 
+        riser_plug_rows: dict[str, list[int]] = defaultdict(list)
+        riser_segment_by_row: dict[int, str] = {}
+        riser_first_segment_lengths: dict[str, Decimal] = {}
+        bp_node_by_row: dict[int, str] = {}
+        bp_occurrence_by_row: dict[int, int] = {}
+        bp_occurrences: dict[str, int] = defaultdict(int)
+        for row_number, values in enumerate(sheet.iter_rows(min_row=6, values_only=True), start=6):
+            source_type, source_label = _text(_cell(values, 1)), _text(_cell(values, 2))
+            load_type, load_label = _text(_cell(values, 3)), _text(_cell(values, 4))
+            if source_type.upper() != "BUS RISER" or load_type.upper() != "BP":
+                continue
+            riser_name = _node_name(source_type, source_label)
+            riser_plug_rows[riser_name].append(row_number)
+            bp_node = _node_name(load_type, load_label)
+            bp_occurrences[bp_node.casefold()] += 1
+            occurrence = bp_occurrences[bp_node.casefold()]
+            bp_occurrence_by_row[row_number] = occurrence
+            bp_node_by_row[row_number] = (
+                bp_node if occurrence == 1 else f"{bp_node} - {occurrence}"
+            )
+            if occurrence > 1:
+                _warn(
+                    warnings,
+                    f"FIELD CABLEOCP row {row_number}: duplicate bus plug ID {load_label}; "
+                    f"kept as {bp_node_by_row[row_number]}.",
+                    log,
+                )
+
+        for riser_name, row_numbers in riser_plug_rows.items():
+            riser_data = bus_duct_data.get(riser_name)
+            riser_length = _decimal_value(riser_data.get("length") if riser_data else "")
+            if riser_length is None:
+                _warn(
+                    warnings,
+                    f"{riser_name}: BUS DUCT length is missing or invalid; "
+                    "bus-riser segments were not generated.",
+                    log,
+                )
+                continue
+            if _decimal_value(riser_data.get("ampacity") if riser_data else "") is None:
+                _warn(
+                    warnings,
+                    f"{riser_name}: BUS DUCT ampacity is missing or invalid; "
+                    "bus-riser segments were not generated.",
+                    log,
+                )
+                continue
+            first_segment_length = riser_length - Decimal("0.1") * (len(row_numbers) - 1)
+            if first_segment_length < 0:
+                _warn(
+                    warnings,
+                    f"{riser_name}: {len(row_numbers)} bus plugs require more 0.1 ft "
+                    f"segments than its {riser_length} ft length allows; "
+                    "bus-riser segments were not generated.",
+                    log,
+                )
+                continue
+            riser_first_segment_lengths[riser_name] = first_segment_length
+            for segment_number, row_number in enumerate(row_numbers, start=1):
+                riser_segment_by_row[row_number] = f"{riser_name} - {segment_number}"
+
+        bp_node_by_label: dict[str, str] = {}
+        bp_occurrence_by_label: dict[str, int] = {}
         for row_number, values in enumerate(sheet.iter_rows(min_row=6, values_only=True), start=6):
             source_type, source_label = _text(_cell(values, 1)), _text(_cell(values, 2))
             load_type, load_label = _text(_cell(values, 3)), _text(_cell(values, 4))
             if not any((source_type, source_label, load_type, load_label)):
                 continue
+            source_bp_node = (
+                bp_node_by_label.get(source_label.casefold())
+                if source_type.upper() == "BP"
+                else None
+            )
+            load_bp_node = (
+                bp_node_by_row.get(row_number)
+                if load_type.upper() == "BP"
+                else None
+            )
+            if load_bp_node:
+                bp_node_by_label[load_label.casefold()] = load_bp_node
+                bp_occurrence_by_label[load_label.casefold()] = bp_occurrence_by_row[row_number]
             row_context = f"FIELD CABLEOCP row {row_number}"
             log.debug(
                 "%s inputs: %s",
@@ -130,7 +207,16 @@ def build_records(
                 load_type in {"CB MAIN", "FUSE MAIN"} or not load_type
             )
             if source_type and source_label and is_main_protection:
-                source_ref = _endpoint_ref(source_type, source_label, _text(_cell(values, 5)), transformer_sides)
+                source_ref = (
+                    f"{source_bp_node}:1"
+                    if source_bp_node
+                    else _endpoint_ref(
+                        source_type,
+                        source_label,
+                        _text(_cell(values, 5)),
+                        transformer_sides,
+                    )
+                )
                 if source_ref is None:
                     _warn(warnings, f"{row_context}: main protective device has an unresolved source endpoint.", log)
                     continue
@@ -181,15 +267,15 @@ def build_records(
                         "ComponentType": "112",
                         "ConnectedComponent1": f"{incoming_cable_name}:2",
                         "ConnectedComponent2": source_ref,
-                        "SystemNominalVoltage": voltage,
+                        "SystemNominalVoltage": _rpt_real(voltage),
                         "ProtectionType": protection_code,
                         "Manufacturer": protection_values[0],
                         "Type": model,
                         "Frame/Model": model,
-                        "FrameVoltage": voltage,
-                        "InterruptingRating": protection_values[2],
-                        "Sensor/Trip": protection_values[3],
-                        "Plug": protection_values[3],
+                        "FrameVoltage": _rpt_real(voltage),
+                        "InterruptingRating": _rpt_real(protection_values[2]),
+                        "Sensor/Trip": _rpt_real(protection_values[3]),
+                        "Plug": _rpt_real(protection_values[3]),
                         "ProtectiveDeviceLibName": "",
                     },
                     logger=log,
@@ -202,8 +288,18 @@ def build_records(
                 continue
 
             voltage = _text(_cell(values, 5))
-            source_ref = _endpoint_ref(source_type, source_label, voltage, transformer_sides)
-            load_ref = _endpoint_ref(load_type, load_label, voltage, transformer_sides)
+            source_ref = (
+                f"{source_bp_node}:1"
+                if source_bp_node
+                else _endpoint_ref(source_type, source_label, voltage, transformer_sides)
+            )
+            if source_type.upper() == "BUS RISER" and row_number in riser_segment_by_row:
+                source_ref = f"{riser_segment_by_row[row_number]}:1"
+            load_ref = (
+                f"{load_bp_node}:1"
+                if load_bp_node
+                else _endpoint_ref(load_type, load_label, voltage, transformer_sides)
+            )
             if source_ref is None or load_ref is None:
                 _warn(warnings, f"{row_context}: skipped because a transformer endpoint is ambiguous or missing from XFMR.", log)
                 continue
@@ -213,6 +309,11 @@ def build_records(
                 if component_type == "TRANS":
                     continue
                 bus_name = _node_name(component_type, label)
+                if component_type.upper() == "BP":
+                    if load_type.upper() == "BP" and label.casefold() == load_label.casefold():
+                        bus_name = load_bp_node or bus_name
+                    elif source_type.upper() == "BP" and label.casefold() == source_label.casefold():
+                        bus_name = source_bp_node or bus_name
                 bus = buses.setdefault(bus_name, {"ComponentName": bus_name, "ComponentType": "10"})
                 if voltage and not bus.get("SystemNominalVoltage"):
                     bus["SystemNominalVoltage"] = voltage
@@ -227,8 +328,22 @@ def build_records(
 
             cable_name = f"FEED {load_type} {load_label}"
             if cable_name in cable_names:
-                _warn(warnings, f"{row_context}: duplicate feeder name {cable_name}; skipped.", log)
-                continue
+                if source_type.upper() == "BP" or load_type.upper() == "BP":
+                    occurrence = (
+                        bp_occurrence_by_row.get(row_number)
+                        or bp_occurrence_by_label.get(source_label.casefold())
+                        or row_number
+                    )
+                    cable_name = _unique_feeder_name(cable_name, cable_names, occurrence)
+                    _warn(
+                        warnings,
+                        f"{row_context}: duplicate feeder name {f'FEED {load_type} {load_label}'}; "
+                        f"retained as {cable_name} for a separate bus plug.",
+                        log,
+                    )
+                else:
+                    _warn(warnings, f"{row_context}: duplicate feeder name {cable_name}; skipped.", log)
+                    continue
             cable_names.add(cable_name)
             circular_mils = _circular_mils(_cell(values, 10))
 
@@ -250,43 +365,58 @@ def build_records(
                         "ComponentType": "112",
                         "ConnectedComponent1": f"{cable_name}:2",
                         "ConnectedComponent2": load_ref,
-                        "SystemNominalVoltage": voltage,
+                        "SystemNominalVoltage": _rpt_real(voltage),
                         "ProtectionType": protection_code,
                         "Manufacturer": protection_values[0],
                         "Type": model,
                         "Frame/Model": model,
-                        "FrameVoltage": voltage,
-                        "InterruptingRating": protection_values[2],
-                        "Sensor/Trip": protection_values[3],
-                        "Plug": protection_values[3],
+                        "FrameVoltage": _rpt_real(voltage),
+                        "InterruptingRating": _rpt_real(protection_values[2]),
+                        "Sensor/Trip": _rpt_real(protection_values[3]),
+                        "Plug": _rpt_real(protection_values[3]),
                         "ProtectiveDeviceLibName": "",
                     },
                     logger=log,
                     context=row_context,
                 )
 
+            cable_values = {
+                "ComponentName": cable_name,
+                "ComponentType": "20",
+                "ConnectedComponent1": source_ref,
+                "ConnectedComponent2": f"{device_name}:1" if has_protection else load_ref,
+                "SystemNominalVoltage": voltage,
+                "CableSize": _text(_cell(values, 10)),
+                "Length": _text(_cell(values, 11)),
+                "ConductorType": _conductor_type(_cell(values, 12)),
+                "InsulationClass": _text(_cell(values, 13)),
+                "Manufacturer": "IEEE 141 - Red Book",
+                "Description": "NEC Table 310-16",
+                "DuctMaterial": _text(_cell(values, 14)),
+                "Conductor Desc": _text(_cell(values, 15)),
+                "Installation": "Conduit",
+                "VoltageRating": "600",
+                "CircularMils": circular_mils,
+                "#/Conductors": _conductor_count(_cell(values, 9)),
+            }
+            is_busway_cable = False
+            if (
+                source_type.upper() == "BUS RISER" and load_type.upper() == "BP"
+            ) or (
+                load_type.upper() == "BUS RISER"
+                and _text(_cell(values, 10)).upper().startswith("BUS")
+            ):
+                riser_label = source_label if source_type.upper() == "BUS RISER" else load_label
+                riser_name = _node_name("BUS RISER", riser_label)
+                riser_data = bus_duct_data.get(riser_name)
+                if riser_data and _decimal_value(riser_data.get("ampacity")) is not None:
+                    cable_values.update(_busway_cable_values(riser_data))
+                    is_busway_cable = True
+
             _append_record(
                 records,
                 "Cable",
-                {
-                    "ComponentName": cable_name,
-                    "ComponentType": "20",
-                    "ConnectedComponent1": source_ref,
-                    "ConnectedComponent2": f"{device_name}:1" if has_protection else load_ref,
-                    "SystemNominalVoltage": voltage,
-                    "CableSize": _text(_cell(values, 10)),
-                    "Length": _text(_cell(values, 11)),
-                    "ConductorType": _conductor_type(_cell(values, 12)),
-                    "InsulationClass": _text(_cell(values, 13)),
-                    "Manufacturer": "IEEE 141 - Red Book",
-                    "Description": "NEC Table 310-16",
-                    "DuctMaterial": _text(_cell(values, 14)),
-                    "Conductor Desc": _text(_cell(values, 15)),
-                    "Installation": "Conduit",
-                    "VoltageRating": "600",
-                    "CircularMils": circular_mils,
-                    "#/Conductors": _conductor_count(_cell(values, 9)),
-                },
+                cable_values,
                 logger=log,
                 context=row_context,
             )
@@ -294,8 +424,18 @@ def build_records(
             incoming_cables[load_ref] = cable_name
             if not _text(_cell(values, 10)) or not _text(_cell(values, 11)):
                 _warn(warnings, f"{row_context}: {cable_name} is missing cable size or length.", log)
-            elif not circular_mils:
+            elif not circular_mils and not is_busway_cable:
                 _warn(warnings, f"{row_context}: {cable_name} has an unsupported cable size; circular mils were left blank.", log)
+
+        _append_bus_riser_segments(
+            records,
+            buses,
+            riser_plug_rows,
+            riser_segment_by_row,
+            riser_first_segment_lengths,
+            bus_duct_data,
+            logger=log,
+        )
 
         for bus in buses.values():
             _append_record(records, "Bus", bus, logger=log, context="FIELD CABLEOCP bus aggregation")
@@ -383,16 +523,24 @@ def _bus_ducts(
     buses: dict[str, dict[str, str]],
     warnings: list[str],
     logger: logging.Logger,
-) -> None:
+) -> dict[str, dict[str, str]]:
+    bus_duct_data: dict[str, dict[str, str]] = {}
     if "BUS DUCT" not in workbook.sheetnames:
         logger.info("BUS DUCT sheet not present; no bus duct records to convert")
-        return
+        return bus_duct_data
     for row_number, values in enumerate(workbook["BUS DUCT"].iter_rows(min_row=6, values_only=True), start=6):
         name = _text(_cell(values, 1))
         if not name:
             continue
         context = f"BUS DUCT row {row_number}"
         component_name = name if name.upper().startswith("BUS RISER ") else f"BUS RISER {name}"
+        bus_duct_data[component_name] = {
+            "model": _text(_cell(values, 2)),
+            "ampacity": _text(_cell(values, 3)),
+            "length": _text(_cell(values, 4)),
+            "manufacturer": _text(_cell(values, 5)),
+            "conductor": _conductor_type(_cell(values, 6)),
+        }
         bus = buses.setdefault(component_name, {"ComponentName": component_name, "ComponentType": "10"})
         bus.update(
             {
@@ -404,6 +552,112 @@ def _bus_ducts(
         logger.debug("%s mapped to Bus record %s: %s", context, component_name, bus)
         if not bus["ContinuousRating"]:
             _warn(warnings, f"{context}: {component_name} is missing ampacity.", logger)
+    return bus_duct_data
+
+
+def _append_bus_riser_segments(
+    records: dict[str, list[tuple[str, ...]]],
+    buses: dict[str, dict[str, str]],
+    riser_plug_rows: dict[str, list[int]],
+    segment_by_row: dict[int, str],
+    first_segment_lengths: dict[str, Decimal],
+    bus_duct_data: dict[str, dict[str, str]],
+    logger: logging.Logger,
+) -> None:
+    cable_fields = SECTION_FIELDS["Cable"]
+    used_cable_names = {
+        dict(zip(cable_fields, record))["ComponentName"]
+        for record in records.get("Cable", ())
+    }
+
+    for riser_name, row_numbers in riser_plug_rows.items():
+        if riser_name not in first_segment_lengths:
+            continue
+        root_bus = buses.get(riser_name, {})
+        voltage = root_bus.get("SystemNominalVoltage", "")
+        busway_cable_values = _busway_cable_values(bus_duct_data[riser_name])
+
+        for segment_number, row_number in enumerate(row_numbers, start=1):
+            segment_name = segment_by_row[row_number]
+            buses[segment_name] = {
+                "ComponentName": segment_name,
+                "ComponentType": "10",
+                "SystemNominalVoltage": voltage,
+                "ContinuousRating": "0.0",
+            }
+
+            cable_name = f"FEED {segment_name}"
+            if cable_name in used_cable_names:
+                unique_name = _unique_feeder_name(cable_name, used_cable_names, segment_number)
+                logger.warning(
+                    "%s: duplicate bus-riser segment cable name %s; retained as %s.",
+                    riser_name,
+                    cable_name,
+                    unique_name,
+                )
+                cable_name = unique_name
+            used_cable_names.add(cable_name)
+
+            cable = dict(busway_cable_values)
+            cable.update(
+                {
+                    "ComponentName": cable_name,
+                    "ComponentType": "20",
+                    "ConnectedComponent1": (
+                        f"{riser_name}:1"
+                        if segment_number == 1
+                        else f"{segment_by_row[row_numbers[segment_number - 2]]}:1"
+                    ),
+                    "ConnectedComponent2": f"{segment_name}:1",
+                    "SystemNominalVoltage": voltage,
+                    "Length": _rpt_real(
+                        first_segment_lengths[riser_name]
+                        if segment_number == 1
+                        else Decimal("0.1")
+                    ),
+                }
+            )
+            _append_record(
+                records,
+                "Cable",
+                cable,
+                logger=logger,
+                context=f"{riser_name} segment {segment_number}",
+            )
+
+
+def _busway_cable_values(riser_data: dict[str, str]) -> dict[str, str]:
+    ampacity = _decimal_value(riser_data.get("ampacity", ""))
+    cable_size = (
+        f"{format(ampacity.normalize(), 'f')} Amps"
+        if ampacity is not None
+        else "BUS"
+    )
+    values = {
+        "CableSize": cable_size,
+        "Manufacturer": "BUS",
+        "ConductorType": riser_data.get("conductor", ""),
+        "Description": "Generic",
+        "DuctMaterial": "Busway",
+        "InsulationType": "Epoxy",
+        "InsulationClass": "Class B",
+        "Conductor Desc": "225-5000A",
+        "Installation": "Sandwich",
+        "VoltageRating": "600",
+        "KeyInLibrary": "1",
+    }
+    if ampacity is not None:
+        values["Ampacity"] = _rpt_real(ampacity)
+    return values
+
+
+def _unique_feeder_name(base_name: str, used_names: set[str], suffix: int) -> str:
+    candidate = f"{base_name} - {suffix}"
+    disambiguator = 2
+    while candidate in used_names:
+        candidate = f"{base_name} - {suffix}-{disambiguator}"
+        disambiguator += 1
+    return candidate
 
 
 def _endpoint_ref(
@@ -491,6 +745,33 @@ def _text(value: object) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value).strip()
+
+
+def _decimal_value(value: object) -> Decimal | None:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() else None
+
+
+def _rpt_real(value: object) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return text
+    if not number.is_finite():
+        return text
+    number = number.normalize()
+    if number == number.to_integral_value():
+        return f"{number:.1f}"
+    return format(number, "f")
 
 
 def _conductor_type(value: object) -> str:
