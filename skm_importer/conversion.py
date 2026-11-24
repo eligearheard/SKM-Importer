@@ -91,6 +91,7 @@ def build_records(
                 continue
             riser_name = _node_name(source_type, source_label)
             riser_plug_rows[riser_name].append(row_number)
+            riser_segment_by_row[row_number] = riser_name
             bp_node = _node_name(load_type, load_label)
             bp_occurrences[bp_node.casefold()] += 1
             occurrence = bp_occurrences[bp_node.casefold()]
@@ -136,7 +137,7 @@ def build_records(
                 )
                 continue
             riser_first_segment_lengths[riser_name] = first_segment_length
-            for segment_number, row_number in enumerate(row_numbers, start=1):
+            for segment_number, row_number in enumerate(row_numbers[1:], start=1):
                 riser_segment_by_row[row_number] = f"{riser_name} - {segment_number}"
 
         bp_node_by_label: dict[str, str] = {}
@@ -412,6 +413,12 @@ def build_records(
                 if riser_data and _decimal_value(riser_data.get("ampacity")) is not None:
                     cable_values.update(_busway_cable_values(riser_data))
                     is_busway_cable = True
+            if load_type.upper() == "BUS RISER":
+                riser_name = _node_name(load_type, load_label)
+                if riser_name in riser_first_segment_lengths:
+                    cable_values["Length"] = _rpt_real(
+                        riser_first_segment_lengths[riser_name]
+                    )
 
             _append_record(
                 records,
@@ -577,7 +584,7 @@ def _append_bus_riser_segments(
         voltage = root_bus.get("SystemNominalVoltage", "")
         busway_cable_values = _busway_cable_values(bus_duct_data[riser_name])
 
-        for segment_number, row_number in enumerate(row_numbers, start=1):
+        for segment_number, row_number in enumerate(row_numbers[1:], start=1):
             segment_name = segment_by_row[row_number]
             buses[segment_name] = {
                 "ComponentName": segment_name,
@@ -603,18 +610,10 @@ def _append_bus_riser_segments(
                 {
                     "ComponentName": cable_name,
                     "ComponentType": "20",
-                    "ConnectedComponent1": (
-                        f"{riser_name}:1"
-                        if segment_number == 1
-                        else f"{segment_by_row[row_numbers[segment_number - 2]]}:1"
-                    ),
+                    "ConnectedComponent1": f"{segment_by_row[row_numbers[segment_number - 1]]}:1",
                     "ConnectedComponent2": f"{segment_name}:1",
                     "SystemNominalVoltage": voltage,
-                    "Length": _rpt_real(
-                        first_segment_lengths[riser_name]
-                        if segment_number == 1
-                        else Decimal("0.1")
-                    ),
+                    "Length": _rpt_real(Decimal("0.1")),
                 }
             )
             _append_record(
@@ -635,19 +634,30 @@ def _busway_cable_values(riser_data: dict[str, str]) -> dict[str, str]:
     )
     values = {
         "CableSize": cable_size,
+        "NeutralSize": "N/A",
+        "QtyPerPhase": "1",
         "Manufacturer": "BUS",
         "ConductorType": riser_data.get("conductor", ""),
+        "#/Conductors": "0",
         "Description": "Generic",
         "DuctMaterial": "Busway",
         "InsulationType": "Epoxy",
         "InsulationClass": "Class B",
         "Conductor Desc": "225-5000A",
         "Installation": "Sandwich",
+        "AmpacityDescription": "NONE",
         "VoltageRating": "600",
         "KeyInLibrary": "1",
     }
     if ampacity is not None:
         values["Ampacity"] = _rpt_real(ampacity)
+        values["Ampacity Sec"] = _rpt_real(ampacity)
+        circular_mils = ampacity * 1000
+        values["CircularMils"] = (
+            str(int(circular_mils))
+            if circular_mils == circular_mils.to_integral_value()
+            else format(circular_mils, "f")
+        )
     return values
 
 
